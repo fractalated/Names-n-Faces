@@ -129,7 +129,7 @@ async function ocrBatch(items, instruction) {
 // Connected-component blob detection on non-white pixels. Runs on a
 // downscaled copy for speed; returned boxes are scaled back to full-res.
 function detectBlobs(canvas) {
-  const analysisWidth = 650;
+  const analysisWidth = 900;
   const scale = Math.min(1, analysisWidth / canvas.width);
   const w = Math.max(1, Math.round(canvas.width * scale));
   const h = Math.max(1, Math.round(canvas.height * scale));
@@ -146,18 +146,21 @@ function detectBlobs(canvas) {
     ink[i] = (255 - r) + (255 - g) + (255 - b) > 45 ? 1 : 0;
   }
 
-  // Dilate a couple pixels so glyphs merge into words/lines and photo noise
-  // merges into one blob, while true whitespace gutters stay intact.
-  const R = 2;
+  // Dilate mostly horizontally so glyphs merge into words/lines and photo
+  // noise merges into one blob. Vertical reach is kept to 1px (anti-alias
+  // slack only) so the gap between grid rows never bridges — a wider
+  // vertical reach was merging whole columns into one tall blob per column.
+  const RX = 3;
+  const RY = 1;
   const dilated = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       let found = 0;
-      for (let dy = -R; dy <= R && !found; dy++) {
+      for (let dy = -RY; dy <= RY && !found; dy++) {
         const yy = y + dy;
         if (yy < 0 || yy >= h) continue;
         const rowBase = yy * w;
-        for (let dx = -R; dx <= R; dx++) {
+        for (let dx = -RX; dx <= RX; dx++) {
           const xx = x + dx;
           if (xx < 0 || xx >= w) continue;
           if (ink[rowBase + xx]) { found = 1; break; }
