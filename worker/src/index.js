@@ -66,48 +66,29 @@ const COLLECTIONS = [
   "period-6", "period-7", "period-8", "period-9", "chapel",
 ];
 
-function patternToCollection(pattern) {
-  if (!pattern) return null;
-  const p = pattern.toString().trim().toLowerCase();
-  if (p === "chapel") return "chapel";
-  const n = parseInt(p, 10);
-  if (n >= 1 && n <= 9) return `period-${n}`;
-  return null;
-}
-
-const ROSTER_TOOL = {
-  name: "report_roster_page",
-  description: "Report the class/period identifier and each student's name and photo location found on a school class roster page.",
+const OCR_TOOL = {
+  name: "report_text_batch",
+  description: "Report the transcribed text found in each provided image, in the same order the images were given.",
   input_schema: {
     type: "object",
     properties: {
-      pattern: {
-        type: "string",
-        description: "The value printed after 'Pattern:' near the top of the page (e.g. '1', '4', 'chapel'). Empty string if not present.",
-      },
-      students: {
+      texts: {
         type: "array",
-        description: "Every student listed on the page, in the order their photos appear (left to right, top to bottom).",
-        items: {
-          type: "object",
-          properties: {
-            name: { type: "string", description: "Student name exactly as printed, e.g. 'Bradshaw, Abby'." },
-            hasPhoto: { type: "boolean", description: "True if this student has a visible headshot photo on the page." },
-            bbox: {
-              type: "array",
-              items: { type: "number" },
-              description: "[x0,y0,x1,y1] as fractions (0 to 1) of the full image width/height, tightly bounding ONLY the photo itself (not the printed name text below it). Empty array if hasPhoto is false.",
-            },
-          },
-          required: ["name", "hasPhoto", "bbox"],
-        },
+        items: { type: "string" },
+        description: "One entry per input image, in the same order as given, containing the exact transcribed text. Empty string if unreadable or blank.",
       },
     },
-    required: ["pattern", "students"],
+    required: ["texts"],
   },
 };
 
-async function extractRosterPage(env, imageBase64, mediaType) {
+async function ocrBatch(env, images, instruction) {
+  const content = [{ type: "text", text: instruction }];
+  images.forEach((img, i) => {
+    content.push({ type: "text", text: `Image ${i + 1}:` });
+    content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+  });
+
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -117,24 +98,10 @@ async function extractRosterPage(env, imageBase64, mediaType) {
     },
     body: JSON.stringify({
       model: "claude-sonnet-5",
-      max_tokens: 4096,
-      tools: [ROSTER_TOOL],
-      tool_choice: { type: "tool", name: "report_roster_page" },
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "This image is one page of a school 'Class Roster' export. Near the top it has a 'Pattern:' field giving the period number or 'chapel'. Below that is a grid of student headshot photos with the student's name printed in bold directly under each photo. Extract the pattern value and every student's name with a tight bounding box around just their photo. If a student's photo appears missing, blank, or broken, set hasPhoto to false and bbox to an empty array, but still include their name.",
-            },
-            {
-              type: "image",
-              source: { type: "base64", media_type: mediaType, data: imageBase64 },
-            },
-          ],
-        },
-      ],
+      max_tokens: 2048,
+      tools: [OCR_TOOL],
+      tool_choice: { type: "tool", name: "report_text_batch" },
+      messages: [{ role: "user", content }],
     }),
   });
 
@@ -144,11 +111,9 @@ async function extractRosterPage(env, imageBase64, mediaType) {
   }
 
   const data = await response.json();
-  const toolUse = data.content.find((c) => c.type === "tool_use" && c.name === "report_roster_page");
-  if (!toolUse) throw new Error("No structured extraction returned");
-
-  const collection = patternToCollection(toolUse.input.pattern);
-  return { collection, pattern: toolUse.input.pattern, students: toolUse.input.students };
+  const toolUse = data.content.find((c) => c.type === "tool_use" && c.name === "report_text_batch");
+  if (!toolUse) throw new Error("No structured OCR result returned");
+  return toolUse.input.texts;
 }
 
 export default {
@@ -173,16 +138,16 @@ export default {
       return json({ error: "Unauthorized" }, 401, env);
     }
 
-    if (pathname === "/api/import/extract-page" && request.method === "POST") {
-      const { image, mediaType } = await request.json().catch(() => ({}));
-      if (!image || !mediaType) {
-        return json({ error: "image and mediaType are required" }, 400, env);
+    if (pathname === "/api/import/ocr-batch" && request.method === "POST") {
+      const { images, instruction } = await request.json().catch(() => ({}));
+      if (!Array.isArray(images) || images.length === 0 || !instruction) {
+        return json({ error: "images[] and instruction are required" }, 400, env);
       }
       try {
-        const extracted = await extractRosterPage(env, image, mediaType);
-        return json(extracted, 200, env);
+        const texts = await ocrBatch(env, images, instruction);
+        return json({ texts }, 200, env);
       } catch (err) {
-        return json({ error: err.message || "Extraction failed" }, 502, env);
+        return json({ error: err.message || "OCR failed" }, 502, env);
       }
     }
 
