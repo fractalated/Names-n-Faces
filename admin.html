@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Manage Roster — Names & Faces</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+  <div class="topbar">
+    <div>
+      <h1>Manage Roster</h1>
+      <p class="subtitle">Import from a PDF, add students one at a time, or manage what's already saved.</p>
+    </div>
+    <div><a href="index.html">&larr; Home</a></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="import">Import from PDF</button>
+    <button class="tab-btn" data-tab="add">Add Student</button>
+    <button class="tab-btn" data-tab="manage">Manage Existing</button>
+  </div>
+
+  <!-- Import from PDF -->
+  <div id="tab-import" class="tab-panel">
+    <div class="card">
+      <p>Upload a class roster PDF. Each page is read by AI to find the period (or Chapel) and every student's name and photo. Nothing is saved until you review and confirm below — importing a collection <strong>replaces</strong> everything currently saved for that collection.</p>
+      <input type="file" id="pdf-input" accept="application/pdf">
+      <div id="page-status" style="margin-top:14px;"></div>
+    </div>
+
+    <div id="import-review"></div>
+  </div>
+
+  <!-- Add Student -->
+  <div id="tab-add" class="tab-panel hidden">
+    <div class="card">
+      <form id="add-form">
+        <label>Name</label>
+        <input type="text" id="add-name" placeholder="Last, First" required>
+        <div style="height:10px;"></div>
+        <label>Collection</label>
+        <select id="add-collection" required></select>
+        <div style="height:10px;"></div>
+        <label>Photo</label>
+        <input type="file" id="add-photo" accept="image/*" required>
+        <div class="error-msg" id="add-error"></div>
+        <button type="submit" style="margin-top:10px;">Add Student</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Manage Existing -->
+  <div id="tab-manage" class="tab-panel hidden">
+    <div class="card">
+      <label>Collection</label>
+      <select id="manage-collection"></select>
+    </div>
+    <div class="roster-list" id="manage-list"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="app.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>

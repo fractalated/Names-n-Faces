@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Names & Faces</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="login-view" class="page login-box hidden">
+  <h1>Names &amp; Faces</h1>
+  <p class="subtitle">Enter the password to continue.</p>
+  <div class="card">
+    <form id="login-form">
+      <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
+      <div class="error-msg" id="login-error"></div>
+      <button type="submit" style="width:100%; margin-top:10px; justify-content:center;">Log In</button>
+    </form>
+  </div>
+</div>
+
+<div id="home-view" class="page hidden">
+  <div class="topbar">
+    <div>
+      <h1>Names &amp; Faces</h1>
+      <p class="subtitle">Pick a collection to study, or manage your roster.</p>
+    </div>
+    <div>
+      <a href="admin.html">Manage Roster</a>
+      &nbsp;&middot;&nbsp;
+      <a href="#" id="logout-link">Log Out</a>
+    </div>
+  </div>
+
+  <div class="grid" id="collection-grid"></div>
+</div>
+
+<script src="app.js"></script>
+<script>
+function render() {
+  const loggedIn = !!getToken();
+  document.getElementById("login-view").classList.toggle("hidden", loggedIn);
+  document.getElementById("home-view").classList.toggle("hidden", !loggedIn);
+}
+
+document.getElementById("login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const password = document.getElementById("password").value;
+  const errorEl = document.getElementById("login-error");
+  errorEl.textContent = "";
+  try {
+    const res = await fetch(API_BASE + "/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      errorEl.textContent = data.error || "Login failed";
+      return;
+    }
+    setToken(data.token);
+    render();
+  } catch (err) {
+    errorEl.textContent = "Could not reach the server. Try again.";
+  }
+});
+
+document.getElementById("logout-link").addEventListener("click", (e) => {
+  e.preventDefault();
+  logout();
+});
+
+const grid = document.getElementById("collection-grid");
+grid.innerHTML =
+  `<a class="collection-tile all" href="collection.html?c=all">All Collections</a>` +
+  COLLECTIONS.map((c) => `<a class="collection-tile" href="collection.html?c=${c.id}">${c.label}</a>`).join("");
+
+render();
+</script>
+</body>
+</html>

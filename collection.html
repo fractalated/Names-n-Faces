@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Names & Faces</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+  <div class="topbar">
+    <div>
+      <h1 id="title">Loading…</h1>
+      <p class="subtitle" id="subtitle"></p>
+    </div>
+    <div><a href="index.html">&larr; Home</a></div>
+  </div>
+
+  <div id="empty-msg" class="card hidden">No students in this collection yet. Add some from <a href="admin.html">Manage Roster</a>.</div>
+
+  <div id="quiz" class="card flashcard hidden">
+    <div class="progress" id="progress"></div>
+    <img id="photo" alt="Student photo">
+    <div class="name" id="name-display"></div>
+    <div class="actions">
+      <button class="secondary" id="reveal-btn">Reveal Name</button>
+      <button id="next-btn">Next &rarr;</button>
+    </div>
+    <div class="actions">
+      <button class="secondary" id="restart-btn">Shuffle &amp; Restart</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+requireLogin();
+
+const params = new URLSearchParams(location.search);
+const collectionId = params.get("c") || "all";
+document.getElementById("title").textContent = collectionLabel(collectionId);
+
+let deck = [];
+let index = 0;
+let currentObjectUrl = null;
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+async function showCard() {
+  const person = deck[index];
+  document.getElementById("progress").textContent = `Card ${index + 1} of ${deck.length}`;
+  document.getElementById("name-display").textContent = "";
+  document.getElementById("photo").src = "";
+  if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+  currentObjectUrl = await fetchPhotoObjectUrl(person.photoUrl);
+  document.getElementById("photo").src = currentObjectUrl;
+}
+
+document.getElementById("reveal-btn").addEventListener("click", () => {
+  document.getElementById("name-display").textContent = deck[index].name;
+});
+
+document.getElementById("next-btn").addEventListener("click", () => {
+  index = (index + 1) % deck.length;
+  showCard();
+});
+
+document.getElementById("restart-btn").addEventListener("click", () => {
+  deck = shuffle(deck);
+  index = 0;
+  showCard();
+});
+
+async function init() {
+  const res = await apiFetch(`/api/people?collection=${encodeURIComponent(collectionId)}`);
+  const data = await res.json();
+  document.getElementById("subtitle").textContent = `${data.people.length} student${data.people.length === 1 ? "" : "s"}`;
+  if (data.people.length === 0) {
+    document.getElementById("empty-msg").classList.remove("hidden");
+    return;
+  }
+  deck = shuffle(data.people);
+  document.getElementById("quiz").classList.remove("hidden");
+  showCard();
+}
+
+init();
+</script>
+</body>
+</html>

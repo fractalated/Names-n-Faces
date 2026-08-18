@@ -1,0 +1,15 @@
+name = "names-n-faces-api"
+main = "src/index.js"
+compatibility_date = "2026-08-18"
+
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "names-n-faces-photos"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "names-n-faces-db"
+database_id = "ee09f49b-26a2-4a56-941a-09242ba5101a"
+
+[vars]
+ALLOWED_ORIGIN = "https://fractalated.github.io"
