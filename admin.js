@@ -158,32 +158,172 @@ document.getElementById("delete-collection-btn").addEventListener("click", async
 // ---------- PDF Import ----------
 // Strategy: detect photo/name regions deterministically from pixel data (color
 // photos on a white background, separated by whitespace), then only use AI to
-// read the small, already-cropped name snippets and the header label if it
-// isn't present as real PDF text. AI is never used to locate anything.
+// read the small, already-cropped name snippets and (as a last resort) a
+// header region with no real text layer. AI is never used to locate anything.
 //
-// The header label is no longer hardcoded to the literal word "Pattern:" —
-// different users group by period, grade level, gender, etc. Whatever
-// "Label: Value" pair is found near the top of the page becomes the detected
-// collection; the review screen below is where a user corrects a bad guess
-// or merges it into an existing collection, rather than an upfront wizard.
+// Header field detection is a two-pass, user-confirmed process:
+//   1. Scan every page's header text (real text layer; OCR only as a
+//      fallback) for every "Label: Value" pair AND every distinct bare text
+//      chunk, each kept isolated to its own visual line/column position.
+//      This deliberately surfaces MULTIPLE candidate fields per page (e.g.
+//      both "Room: 110" and "Pattern: 3") instead of guessing one — an
+//      earlier version joined the whole header into one string and ran a
+//      single regex over it, which let the match bridge across unrelated
+//      columns (e.g. pairing "Room" with the neighboring column's value) and
+//      silently merged distinct classes that happened to share a room.
+//   2. Show the user every candidate field found, ranked by how well it
+//      discriminates between pages, and let them pick which one identifies
+//      a group and what to call it. This is the one deliberate prompt in
+//      the pipeline — everything else stays automatic.
 
 function slugifyWord(s) {
   return (s || "").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "");
 }
 
-function toSlug(label, value) {
-  return `${slugifyWord(label)}-${slugifyWord(value)}`;
+function toSlug(fieldName, value) {
+  return `${slugifyWord(fieldName)}-${slugifyWord(value)}`;
 }
 
-function toDisplayLabel(label, value) {
+function toDisplayLabel(fieldName, value) {
   const titleCase = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
   if (/^\d+$/.test(value)) {
-    return `${titleCase(label)} ${value}`; // "Period" + "3" -> "Period 3"
+    return `${titleCase(fieldName)} ${value}`; // "Period" + "3" -> "Period 3"
   }
   return titleCase(value); // "Grade" + "Freshman" -> "Freshman"
 }
 
-const LABEL_VALUE_RE = /([A-Za-z][A-Za-z ]{0,20}):\s*([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?)/;
+const LABEL_VALUE_RE = /^([A-Za-z][A-Za-z ]{0,20}):\s*(.+)$/;
+
+// Groups a page's top-of-header text items into visual lines (top to
+// bottom) and, within each line, into chunks (left to right) — merging
+// items only when they're on the same line and close together horizontally.
+// Header fields that share a horizontal band (e.g. class name / room /
+// teacher name, all on one row) stay isolated to their own chunk instead of
+// bridging into one string, since the gap between columns (~100pt on a
+// typical roster) is far larger than the gap between pieces of one field.
+async function getHeaderLines(page) {
+  const content = await page.getTextContent();
+  const viewBox = page.view; // [x0, y0, x1, y1] in PDF points
+  const pageHeight = viewBox[3] - viewBox[1];
+  const topThreshold = viewBox[1] + pageHeight * 0.78;
+  const items = content.items
+    .filter((item) => item.transform[5] >= topThreshold && item.str.trim())
+    .map((item) => ({ text: item.str, x0: item.transform[4], x1: item.transform[4] + (item.width || 0), y: item.transform[5] }));
+
+  const LINE_TOLERANCE = 3;
+  const lines = [];
+  for (const item of items) {
+    let line = lines.find((l) => Math.abs(l.y - item.y) <= LINE_TOLERANCE);
+    if (!line) { line = { y: item.y, items: [] }; lines.push(line); }
+    line.items.push(item);
+  }
+  lines.sort((a, b) => b.y - a.y);
+
+  const GAP_MERGE_THRESHOLD = 20;
+  return lines.map((line) => {
+    const sorted = [...line.items].sort((a, b) => a.x0 - b.x0);
+    const chunks = [];
+    for (const item of sorted) {
+      const last = chunks[chunks.length - 1];
+      if (last && (item.x0 - last.x1) <= GAP_MERGE_THRESHOLD) {
+        last.text = (last.text + " " + item.text).replace(/\s+/g, " ").trim();
+        last.x1 = item.x1;
+      } else {
+        chunks.push({ text: item.text.trim(), x0: item.x0, x1: item.x1 });
+      }
+    }
+    return chunks;
+  });
+}
+
+// Every chunk becomes a candidate field. "Label: Value" chunks are keyed by
+// the label text, so the same field aggregates across pages even if its
+// exact pixel position drifts slightly. Chunks with no colon (e.g. a class
+// name printed with no explicit label) are keyed by line/column position —
+// a relative position within THIS page, not an absolute pixel coordinate,
+// so small rendering jitter between pages can't split one field into two.
+function extractCandidatesFromLines(lines) {
+  const candidates = [];
+  lines.forEach((lineChunks, lineIndex) => {
+    lineChunks.forEach((chunk, colIndex) => {
+      if (!chunk.text) return;
+      const m = LABEL_VALUE_RE.exec(chunk.text);
+      if (m) {
+        candidates.push({ kind: "labeled", key: `label:${m[1].trim().toLowerCase()}`, label: m[1].trim(), value: m[2].trim() });
+      } else {
+        candidates.push({ kind: "bare", key: `pos:${lineIndex}:${colIndex}`, label: null, value: chunk.text });
+      }
+    });
+  });
+  return candidates;
+}
+
+async function ocrHeaderFallback(canvas) {
+  const headerBlob = await cropPixelRect(canvas, { x0: 0, y0: 0, x1: canvas.width, y1: canvas.height * 0.22 });
+  const texts = await ocrBatch(
+    [{ blob: headerBlob, mediaType: "image/jpeg" }],
+    "Read the short classification label printed near the top of this school class roster page — it identifies what group these students belong to (for example a period number, a grade level, or a gender). Respond with the label word and its value separated by a colon, e.g. 'Period: 3' or 'Grade: Freshman'. If no such label is visible, respond with 'NONE'."
+  );
+  const text = (texts[0] || "").trim();
+  if (!text || text.toUpperCase() === "NONE") return [];
+  const m = LABEL_VALUE_RE.exec(text);
+  return m
+    ? [{ kind: "labeled", key: `label:${m[1].trim().toLowerCase()}`, label: m[1].trim(), value: m[2].trim() }]
+    : [{ kind: "bare", key: "pos:ocr:0", label: null, value: text }];
+}
+
+// Scans every page's header and returns each page's candidate fields.
+// Cheap (real text layer) for every page except ones with no text layer at
+// all, which fall back to a render + OCR read of the cropped header region.
+async function scanHeaderCandidates(pdf, statusEl) {
+  const perPage = [];
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const row = document.createElement("div");
+    row.className = "import-page-status";
+    row.innerHTML = `<span class="spinner"></span> Scanning header on page ${pageNum} of ${pdf.numPages}…`;
+    statusEl.appendChild(row);
+
+    const page = await pdf.getPage(pageNum);
+    const lines = await getHeaderLines(page);
+    let candidates = extractCandidatesFromLines(lines);
+    if (candidates.length === 0) {
+      const canvas = await renderPageToCanvas(page);
+      candidates = await ocrHeaderFallback(canvas);
+    }
+    perPage.push({ pageNum, candidates });
+    row.innerHTML = candidates.length
+      ? `✅ Page ${pageNum}: found ${candidates.length} header field(s)`
+      : `⚠️ Page ${pageNum}: no header fields detected`;
+  }
+  return perPage;
+}
+
+// Ranks candidate fields by how well they discriminate between pages —
+// favoring a different value on nearly every page (like a period number)
+// over one that repeats across several pages (like a shared room number),
+// which is exactly the distinction that was getting lost before.
+function rankCandidates(perPageCandidates, totalPages) {
+  const byKey = new Map();
+  for (const { pageNum, candidates } of perPageCandidates) {
+    for (const c of candidates) {
+      if (!byKey.has(c.key)) byKey.set(c.key, { key: c.key, kind: c.kind, label: c.label, valuesByPage: new Map() });
+      byKey.get(c.key).valuesByPage.set(pageNum, c.value);
+    }
+  }
+  return [...byKey.values()]
+    .map((c) => {
+      const distinctValues = new Set(c.valuesByPage.values());
+      return { ...c, pagesCovered: c.valuesByPage.size, distinctCount: distinctValues.size, exampleValues: [...distinctValues] };
+    })
+    .filter((c) => c.pagesCovered >= Math.min(2, totalPages) && (totalPages === 1 || c.distinctCount >= 2))
+    .sort((a, b) => {
+      if (b.pagesCovered !== a.pagesCovered) return b.pagesCovered - a.pagesCovered;
+      const ratioA = a.distinctCount / a.pagesCovered, ratioB = b.distinctCount / b.pagesCovered;
+      if (ratioB !== ratioA) return ratioB - ratioA;
+      if (a.kind !== b.kind) return a.kind === "labeled" ? -1 : 1;
+      return 0;
+    });
+}
 
 async function renderPageToCanvas(page, targetWidth = 1600) {
   const viewport1 = page.getViewport({ scale: 1 });
@@ -354,30 +494,6 @@ function pairPhotosWithNames(photos, texts) {
   });
 }
 
-// Reads whatever "Label: Value" pair is printed near the top of the page —
-// a period, grade level, gender, or anything else a roster might be grouped
-// by — from pdf.js's real text layer first, falling back to OCR on the
-// cropped header region only if the text layer doesn't have it.
-async function extractLabelValue(page, canvas) {
-  const content = await page.getTextContent();
-  const viewBox = page.view; // [x0, y0, x1, y1] in PDF points
-  const pageHeight = viewBox[3] - viewBox[1];
-  const topThreshold = viewBox[1] + pageHeight * 0.78;
-  const topItems = content.items.filter((item) => item.transform[5] >= topThreshold);
-  const text = topItems.map((i) => i.str).join(" ");
-  const match = LABEL_VALUE_RE.exec(text);
-  if (match) return { label: match[1].trim(), value: match[2].trim() };
-
-  const headerBlob = await cropPixelRect(canvas, { x0: 0, y0: 0, x1: canvas.width, y1: canvas.height * 0.22 });
-  const texts = await ocrBatch(
-    [{ blob: headerBlob, mediaType: "image/jpeg" }],
-    "Read the short classification label printed near the top of this school class roster page — it identifies what group these students belong to (for example a period number, a grade level, or a gender). Respond with the label word and its value separated by a colon, e.g. 'Period: 3' or 'Grade: Freshman'. If no such label is visible, respond with 'NONE'."
-  );
-  const ocrText = (texts[0] || "").trim();
-  const ocrMatch = LABEL_VALUE_RE.exec(ocrText);
-  return ocrMatch ? { label: ocrMatch[1].trim(), value: ocrMatch[2].trim() } : null;
-}
-
 document.getElementById("pdf-input").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -388,6 +504,81 @@ document.getElementById("pdf-input").addEventListener("change", async (e) => {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
+  const perPageCandidates = await scanHeaderCandidates(pdf, statusEl);
+  const ranked = rankCandidates(perPageCandidates, pdf.numPages);
+
+  renderFieldPicker(pdf, perPageCandidates, ranked);
+});
+
+function renderFieldPicker(pdf, perPageCandidates, ranked) {
+  const container = document.getElementById("import-review");
+  container.innerHTML = "";
+
+  const section = document.createElement("div");
+  section.className = "card";
+
+  if (ranked.length === 0) {
+    section.innerHTML = `
+      <h3>Choose what identifies each group</h3>
+      <p class="warn">Couldn't automatically detect a repeating header field on these pages. You can still import — every student will need to be assigned to a collection manually afterward from the "Add Student" tab.</p>
+      <button id="field-picker-continue">Continue Without Grouping</button>
+    `;
+    container.appendChild(section);
+    document.getElementById("field-picker-continue").addEventListener("click", () => {
+      runFullImport(pdf, perPageCandidates, null, null);
+    });
+    return;
+  }
+
+  const optionsHtml = ranked.map((c, i) => {
+    const exampleText = c.exampleValues.slice(0, 6).join(", ") + (c.exampleValues.length > 6 ? ", …" : "");
+    const coverageNote = c.pagesCovered < pdf.numPages ? ` — found on ${c.pagesCovered} of ${pdf.numPages} pages` : "";
+    return `
+      <label class="field-picker-option">
+        <input type="radio" name="field-picker" value="${i}" ${i === 0 ? "checked" : ""}>
+        <span><strong>${c.label || "Unlabeled text"}</strong>${coverageNote}: ${exampleText}</span>
+      </label>
+    `;
+  }).join("");
+
+  section.innerHTML = `
+    <h3>Choose what identifies each group</h3>
+    <p>These fields were found near the top of your PDF's pages. Pick the one that should split students into collections, then say what to call it.</p>
+    <div class="field-picker-options">${optionsHtml}</div>
+    <div style="height:10px;"></div>
+    <label>Call this field:</label>
+    <input type="text" id="field-picker-name" value="${ranked[0].label || ""}" placeholder="e.g. Period, Grade, Gender">
+    <div class="error-msg" id="field-picker-error"></div>
+    <button id="field-picker-continue" style="margin-top:10px;">Continue Import</button>
+  `;
+  container.appendChild(section);
+
+  const nameInput = section.querySelector("#field-picker-name");
+  section.querySelectorAll('input[name="field-picker"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      const chosen = ranked[Number(radio.value)];
+      nameInput.value = chosen.label || "";
+    });
+  });
+
+  document.getElementById("field-picker-continue").addEventListener("click", () => {
+    const selectedIndex = Number(section.querySelector('input[name="field-picker"]:checked').value);
+    const fieldName = nameInput.value.trim();
+    const errorEl = document.getElementById("field-picker-error");
+    if (!fieldName) {
+      errorEl.textContent = "Give this field a name before continuing.";
+      return;
+    }
+    runFullImport(pdf, perPageCandidates, ranked[selectedIndex].key, fieldName);
+  });
+}
+
+async function runFullImport(pdf, perPageCandidates, chosenKey, fieldName) {
+  const statusEl = document.getElementById("page-status");
+  statusEl.innerHTML = "";
+  document.getElementById("import-review").innerHTML = "";
+
+  const candidatesByPage = new Map(perPageCandidates.map((p) => [p.pageNum, p.candidates]));
   const groups = {}; // key (slug, or "__unrecognized__") -> {slug, label, students: [{name, blob}]}
   const missing = []; // {page} — photo detected but name couldn't be read
 
@@ -401,9 +592,14 @@ document.getElementById("pdf-input").addEventListener("change", async (e) => {
       const page = await pdf.getPage(pageNum);
       const canvas = await renderPageToCanvas(page);
 
-      const detected = await extractLabelValue(page, canvas);
-      const slug = detected ? toSlug(detected.label, detected.value) : null;
-      const displayLabel = detected ? toDisplayLabel(detected.label, detected.value) : "Unrecognized";
+      let slug = null, displayLabel = "Unrecognized";
+      if (chosenKey) {
+        const match = (candidatesByPage.get(pageNum) || []).find((c) => c.key === chosenKey);
+        if (match) {
+          slug = toSlug(fieldName, match.value);
+          displayLabel = toDisplayLabel(fieldName, match.value);
+        }
+      }
       const key = slug || "__unrecognized__";
 
       const blobs = detectBlobs(canvas);
@@ -446,14 +642,14 @@ document.getElementById("pdf-input").addEventListener("change", async (e) => {
       }
       row.innerHTML = slug
         ? `✅ Page ${pageNum}: ${displayLabel} — ${found} of ${pairs.length} student(s) matched`
-        : `⚠️ Page ${pageNum}: could not determine a grouping label — ${found} of ${pairs.length} student(s) matched, added to "Unrecognized"`;
+        : `⚠️ Page ${pageNum}: no value found for the chosen field — ${found} of ${pairs.length} student(s) matched, added to "Unrecognized"`;
     } catch (err) {
       row.innerHTML = `❌ Page ${pageNum}: ${err.message}`;
     }
   }
 
   await renderImportReview(groups, missing);
-});
+}
 
 async function renderImportReview(groups, missing) {
   const container = document.getElementById("import-review");

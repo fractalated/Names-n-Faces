@@ -105,25 +105,44 @@ precise multi-object detector.
    layer doesn't contain it — the header `Label: Value` text. This is a task
    LLM vision is actually good at (clean OCR of isolated text), unlike
    bounding-box localization.
-6. The header `Label: Value` pair is read via a generic regex
-   (`extractLabelValue` in `admin.js`) over pdf.js's real, selectable text
-   layer first — restricted to the top ~22% of the page (by PDF point
-   coordinates, `page.view`/`item.transform[5]`, not canvas pixels) so an
-   unrelated colon pair elsewhere on the page can't false-match now that the
-   label word isn't hardcoded to a literal like `Pattern:`. Falls back to
-   cropping that header region and OCR'ing it with AI only if the text
-   layer doesn't have it. `toSlug`/`toDisplayLabel` turn the pair into a
-   collection slug/label (e.g. `Period: 3` → slug `period-3`, label
-   `"Period 3"`; `Grade: Freshman` → slug `grade-freshman`, label
-   `"Freshman"`).
-7. There is deliberately **no upfront wizard** asking a new user how their
-   roster is organized — auto-detection runs per-PDF-page, and the one
-   correction point is the import review screen: each detected group gets an
-   editable label plus a dropdown of the user's existing collections
-   (pre-selected on an exact slug match). Pages where no label could be
-   detected at all land in an explicit "Unrecognized" bucket with Save
-   disabled until the user assigns a real collection — there's no hardcoded
-   fallback list to silently drop them into anymore.
+6. Header field detection is a **two-pass, user-confirmed** process
+   (`scanHeaderCandidates`/`rankCandidates`/`renderFieldPicker` in
+   `admin.js`), not a single guess:
+   - **Pass 1** scans every page's header text via pdf.js's real text layer
+     (`getHeaderLines`) — restricted to the top ~22% of the page by PDF
+     point coordinates — and finds **every** `Label: Value` colon pair and
+     every distinct bare (unlabeled) text chunk, each isolated to its own
+     visual line/column (`extractCandidatesFromLines`). Falls back to
+     cropping the header and OCR'ing it only for pages with no real text
+     layer at all (`ocrHeaderFallback`).
+   - Candidates are ranked (`rankCandidates`) by how well they discriminate
+     between pages — favoring a field with a different value on nearly
+     every page (a period number) over one that repeats across several
+     pages (a shared room number) — and shown to the user as a picker, who
+     picks which one identifies a group and what to call it (e.g. rename
+     detected `Pattern` to `Period`).
+   - **Pass 2** (`runFullImport`) then does the existing blob-detection/
+     name-OCR work per page, using the page's value for the *chosen* field
+     to compute a slug/label via `toSlug`/`toDisplayLabel` (e.g.
+     `Period: 3` + chosen name `Period` → slug `period-3`, label
+     `"Period 3"`).
+
+   **Do not go back to a single first-match regex over the whole joined
+   header string** — that was the actual bug this two-pass design replaced.
+   Joining every header text item into one string and running one regex
+   over it let the match bridge across unrelated columns on the same
+   horizontal band (e.g. class name / room / teacher name all sit on one
+   row) and silently merge distinct classes that happened to share a room
+   number. Each header field must stay isolated to its own line+column
+   chunk (`getHeaderLines`'s gap-based merging, not a page-wide string join).
+7. The picker (pass 1's output) is the one deliberate prompt in the whole
+   pipeline — there is still no upfront wizard asking how a roster is
+   organized before a PDF is even chosen. The review screen (after pass 2)
+   remains the fallback correction point for individual pages: each
+   detected group gets an editable label plus a dropdown of the user's
+   existing collections (pre-selected on an exact slug match). Pages with
+   no value for the chosen field land in an explicit "Unrecognized" bucket
+   with Save disabled until the user assigns a real collection.
 
 **Known gotcha (fixed once already — don't reintroduce it):** the blob
 "dilation" step (used to merge individual glyphs into one word/line, and to
