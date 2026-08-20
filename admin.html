@@ -13,7 +13,11 @@
       <h1>Manage Roster</h1>
       <p class="subtitle">Import from a PDF, add students one at a time, or manage what's already saved.</p>
     </div>
-    <div><a href="index.html">&larr; Home</a></div>
+    <div>
+      <a href="users.html" id="manage-users-link" class="hidden">Manage Users</a>
+      &nbsp;&middot;&nbsp;
+      <a href="index.html">&larr; Home</a>
+    </div>
   </div>
 
   <div class="tabs">
@@ -25,7 +29,7 @@
   <!-- Import from PDF -->
   <div id="tab-import" class="tab-panel">
     <div class="card">
-      <p>Upload a class roster PDF. Each page is read by AI to find the period (or Chapel) and every student's name and photo. Nothing is saved until you review and confirm below — importing a collection <strong>replaces</strong> everything currently saved for that collection.</p>
+      <p>Upload a class roster PDF. Each page is scanned to find whatever grouping label is printed at the top (a period, grade level, or gender, for example) plus every student's name and photo. Nothing is saved until you review and confirm below — you can adjust the detected group name or pick an existing one before saving, and importing a group <strong>replaces</strong> everything currently saved for it.</p>
       <input type="file" id="pdf-input" accept="application/pdf">
       <div id="page-status" style="margin-top:14px;"></div>
     </div>
@@ -56,6 +60,12 @@
     <div class="card">
       <label>Collection</label>
       <select id="manage-collection"></select>
+      <div style="height:10px;"></div>
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="secondary" id="rename-collection-btn">Rename</button>
+        <button type="button" class="danger" id="delete-collection-btn">Delete Collection</button>
+      </div>
+      <div class="error-msg" id="manage-collection-error"></div>
     </div>
     <div class="roster-list" id="manage-list"></div>
   </div>

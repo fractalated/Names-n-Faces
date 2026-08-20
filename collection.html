@@ -38,7 +38,7 @@ requireLogin();
 
 const params = new URLSearchParams(location.search);
 const collectionId = params.get("c") || "all";
-document.getElementById("title").textContent = collectionLabel(collectionId);
+document.getElementById("title").textContent = "Loading…";
 
 let deck = [];
 let index = 0;
@@ -79,6 +79,9 @@ document.getElementById("restart-btn").addEventListener("click", () => {
 });
 
 async function init() {
+  await loadCollections();
+  document.getElementById("title").textContent = collectionLabel(collectionId);
+
   const res = await apiFetch(`/api/people?collection=${encodeURIComponent(collectionId)}`);
   const data = await res.json();
   document.getElementById("subtitle").textContent = `${data.people.length} student${data.people.length === 1 ? "" : "s"}`;

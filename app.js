@@ -1,33 +1,21 @@
 const API_BASE = "https://names-n-faces-api.fractalated.workers.dev";
 const TOKEN_KEY = "nnf_token";
 
-const COLLECTIONS = [
-  { id: "period-1", label: "Period 1" },
-  { id: "period-2", label: "Period 2" },
-  { id: "period-3", label: "Period 3" },
-  { id: "period-4", label: "Period 4" },
-  { id: "period-5", label: "Period 5" },
-  { id: "period-6", label: "Period 6" },
-  { id: "period-7", label: "Period 7" },
-  { id: "period-8", label: "Period 8" },
-  { id: "period-9", label: "Period 9" },
-  { id: "chapel", label: "Chapel" },
-];
-
-function collectionLabel(id) {
-  if (id === "all") return "All Collections";
-  const c = COLLECTIONS.find((c) => c.id === id);
-  return c ? c.label : id;
-}
+let cachedCollections = null;
+let cachedUser = null;
 
 function getToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
 function setToken(token) {
   localStorage.setItem(TOKEN_KEY, token);
+  cachedCollections = null;
+  cachedUser = null;
 }
 function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
+  cachedCollections = null;
+  cachedUser = null;
 }
 function requireLogin() {
   if (!getToken()) {
@@ -57,4 +45,31 @@ async function fetchPhotoObjectUrl(photoUrl) {
   if (!res.ok) throw new Error("Photo not found");
   const blob = await res.blob();
   return URL.createObjectURL(blob);
+}
+
+// Fetches (and caches in memory) the logged-in user's own collections. Every
+// user has their own independent set — there is no global fixed list anymore.
+async function loadCollections(force = false) {
+  if (cachedCollections && !force) return cachedCollections;
+  const res = await apiFetch("/api/collections");
+  const data = await res.json();
+  cachedCollections = data.collections;
+  return cachedCollections;
+}
+
+// Fetches (and caches in memory) the logged-in user's identity/role. This is
+// the only source of truth for admin-gating UI — the server independently
+// re-checks admin status on every admin-only route regardless of this.
+async function loadMe(force = false) {
+  if (cachedUser && !force) return cachedUser;
+  const res = await apiFetch("/api/me");
+  cachedUser = await res.json();
+  return cachedUser;
+}
+
+function collectionLabel(slug, collections) {
+  if (slug === "all") return "All Collections";
+  const list = collections || cachedCollections || [];
+  const match = list.find((c) => c.slug === slug);
+  return match ? match.label : slug;
 }

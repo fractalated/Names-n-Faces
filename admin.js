@@ -1,33 +1,64 @@
 requireLogin();
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
+const NEW_COLLECTION_VALUE = "__new__";
+
+(async () => {
+  const me = await loadMe();
+  document.getElementById("manage-users-link").classList.toggle("hidden", !me.isAdmin);
+})();
+
 // ---------- Tabs ----------
 document.querySelectorAll(".tab-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", async () => {
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     btn.classList.add("active");
     document.getElementById("tab-" + btn.dataset.tab).classList.remove("hidden");
+    if (btn.dataset.tab === "add") await fillAddCollectionSelect();
+    if (btn.dataset.tab === "manage") { await fillManageCollectionSelect(); await loadManageList(); }
   });
 });
 
-function fillCollectionSelect(select, includeAll) {
+// ---------- Collection selects ----------
+// Every user has their own independent, dynamic set of collections now (no
+// more fixed Period 1-9/Chapel list) — selects are populated from
+// GET /api/collections and refreshed whenever a collection may have changed.
+
+async function fillAddCollectionSelect() {
+  const select = document.getElementById("add-collection");
+  const collections = await loadCollections();
   select.innerHTML =
-    (includeAll ? `<option value="all">All Collections</option>` : "") +
-    COLLECTIONS.map((c) => `<option value="${c.id}">${c.label}</option>`).join("");
+    collections.map((c) => `<option value="${c.id}">${c.label}</option>`).join("") +
+    `<option value="${NEW_COLLECTION_VALUE}">+ New collection...</option>`;
 }
-fillCollectionSelect(document.getElementById("add-collection"), false);
-fillCollectionSelect(document.getElementById("manage-collection"), true);
+
+async function fillManageCollectionSelect() {
+  const select = document.getElementById("manage-collection");
+  const collections = await loadCollections();
+  select.innerHTML =
+    `<option value="all">All Collections</option>` +
+    collections.map((c) => `<option value="${c.slug}">${c.label}</option>`).join("");
+}
 
 // ---------- Add Student ----------
 document.getElementById("add-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const errorEl = document.getElementById("add-error");
   errorEl.textContent = "";
+  const select = document.getElementById("add-collection");
+
   const form = new FormData();
   form.append("name", document.getElementById("add-name").value);
-  form.append("collection", document.getElementById("add-collection").value);
+  if (select.value === NEW_COLLECTION_VALUE) {
+    const label = prompt('Name this new collection (e.g. "Period 3", "Freshman", "Female"):');
+    if (!label || !label.trim()) return;
+    form.append("newCollectionLabel", label.trim());
+  } else {
+    form.append("collectionId", select.value);
+  }
   form.append("photo", document.getElementById("add-photo").files[0]);
+
   const res = await apiFetch("/api/people", { method: "POST", body: form });
   const data = await res.json();
   if (!res.ok) {
@@ -35,7 +66,8 @@ document.getElementById("add-form").addEventListener("submit", async (e) => {
     return;
   }
   document.getElementById("add-form").reset();
-  fillCollectionSelect(document.getElementById("add-collection"), false);
+  await loadCollections(true);
+  await fillAddCollectionSelect();
 });
 
 // ---------- Manage Existing ----------
@@ -65,22 +97,93 @@ async function loadManageList() {
     list.appendChild(item);
   }
 }
-loadManageList();
+
+document.getElementById("rename-collection-btn").addEventListener("click", async () => {
+  const errorEl = document.getElementById("manage-collection-error");
+  errorEl.textContent = "";
+  if (manageSelect.value === "all") {
+    errorEl.textContent = "Pick a specific collection to rename.";
+    return;
+  }
+  const collections = await loadCollections();
+  const current = collections.find((c) => c.slug === manageSelect.value);
+  if (!current) return;
+  const label = prompt("New name for this collection:", current.label);
+  if (!label || !label.trim() || label.trim() === current.label) return;
+  const res = await apiFetch(`/api/collections/${current.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label: label.trim() }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errorEl.textContent = data.error || "Could not rename collection";
+    return;
+  }
+  await loadCollections(true);
+  await fillManageCollectionSelect();
+  manageSelect.value = current.slug;
+  await fillAddCollectionSelect();
+});
+
+document.getElementById("delete-collection-btn").addEventListener("click", async () => {
+  const errorEl = document.getElementById("manage-collection-error");
+  errorEl.textContent = "";
+  if (manageSelect.value === "all") {
+    errorEl.textContent = "Pick a specific collection to delete.";
+    return;
+  }
+  const collections = await loadCollections();
+  const current = collections.find((c) => c.slug === manageSelect.value);
+  if (!current) return;
+  if (!confirm(`Delete the "${current.label}" collection? This only works if it has no students in it.`)) return;
+  const res = await apiFetch(`/api/collections/${current.id}`, { method: "DELETE" });
+  const data = await res.json();
+  if (!res.ok) {
+    errorEl.textContent = data.error || "Could not delete collection";
+    return;
+  }
+  await loadCollections(true);
+  await fillManageCollectionSelect();
+  await fillAddCollectionSelect();
+  loadManageList();
+});
+
+(async () => {
+  await fillAddCollectionSelect();
+  await fillManageCollectionSelect();
+  await loadManageList();
+})();
 
 // ---------- PDF Import ----------
 // Strategy: detect photo/name regions deterministically from pixel data (color
 // photos on a white background, separated by whitespace), then only use AI to
-// read the small, already-cropped name snippets and the "Pattern:" header if
-// it isn't present as real PDF text. AI is never used to locate anything.
+// read the small, already-cropped name snippets and the header label if it
+// isn't present as real PDF text. AI is never used to locate anything.
+//
+// The header label is no longer hardcoded to the literal word "Pattern:" —
+// different users group by period, grade level, gender, etc. Whatever
+// "Label: Value" pair is found near the top of the page becomes the detected
+// collection; the review screen below is where a user corrects a bad guess
+// or merges it into an existing collection, rather than an upfront wizard.
 
-function patternToCollection(pattern) {
-  if (!pattern) return null;
-  const p = pattern.toString().trim().toLowerCase();
-  if (p === "chapel") return "chapel";
-  const n = parseInt(p, 10);
-  if (n >= 1 && n <= 9) return `period-${n}`;
-  return null;
+function slugifyWord(s) {
+  return (s || "").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "");
 }
+
+function toSlug(label, value) {
+  return `${slugifyWord(label)}-${slugifyWord(value)}`;
+}
+
+function toDisplayLabel(label, value) {
+  const titleCase = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
+  if (/^\d+$/.test(value)) {
+    return `${titleCase(label)} ${value}`; // "Period" + "3" -> "Period 3"
+  }
+  return titleCase(value); // "Grade" + "Freshman" -> "Freshman"
+}
+
+const LABEL_VALUE_RE = /([A-Za-z][A-Za-z ]{0,20}):\s*([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?)/;
 
 async function renderPageToCanvas(page, targetWidth = 1600) {
   const viewport1 = page.getViewport({ scale: 1 });
@@ -251,18 +354,28 @@ function pairPhotosWithNames(photos, texts) {
   });
 }
 
-async function extractPattern(page, canvas) {
+// Reads whatever "Label: Value" pair is printed near the top of the page —
+// a period, grade level, gender, or anything else a roster might be grouped
+// by — from pdf.js's real text layer first, falling back to OCR on the
+// cropped header region only if the text layer doesn't have it.
+async function extractLabelValue(page, canvas) {
   const content = await page.getTextContent();
-  const fullText = content.items.map((i) => i.str).join(" ");
-  const match = fullText.match(/Pattern:\s*([A-Za-z0-9]+)/i);
-  if (match) return match[1];
+  const viewBox = page.view; // [x0, y0, x1, y1] in PDF points
+  const pageHeight = viewBox[3] - viewBox[1];
+  const topThreshold = viewBox[1] + pageHeight * 0.78;
+  const topItems = content.items.filter((item) => item.transform[5] >= topThreshold);
+  const text = topItems.map((i) => i.str).join(" ");
+  const match = LABEL_VALUE_RE.exec(text);
+  if (match) return { label: match[1].trim(), value: match[2].trim() };
 
   const headerBlob = await cropPixelRect(canvas, { x0: 0, y0: 0, x1: canvas.width, y1: canvas.height * 0.22 });
   const texts = await ocrBatch(
     [{ blob: headerBlob, mediaType: "image/jpeg" }],
-    "This is the header area of a school class roster page. Find the label 'Pattern:' and return only the short value printed after it (a single digit 1-9, or the word 'chapel'). Return an empty string if you cannot find it."
+    "Read the short classification label printed near the top of this school class roster page — it identifies what group these students belong to (for example a period number, a grade level, or a gender). Respond with the label word and its value separated by a colon, e.g. 'Period: 3' or 'Grade: Freshman'. If no such label is visible, respond with 'NONE'."
   );
-  return (texts[0] || "").trim() || null;
+  const ocrText = (texts[0] || "").trim();
+  const ocrMatch = LABEL_VALUE_RE.exec(ocrText);
+  return ocrMatch ? { label: ocrMatch[1].trim(), value: ocrMatch[2].trim() } : null;
 }
 
 document.getElementById("pdf-input").addEventListener("change", async (e) => {
@@ -275,9 +388,8 @@ document.getElementById("pdf-input").addEventListener("change", async (e) => {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-  const groups = {}; // collection -> [{name, blob}]
+  const groups = {}; // key (slug, or "__unrecognized__") -> {slug, label, students: [{name, blob}]}
   const missing = []; // {page} — photo detected but name couldn't be read
-  const unmapped = []; // {page, pattern}
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const row = document.createElement("div");
@@ -289,8 +401,10 @@ document.getElementById("pdf-input").addEventListener("change", async (e) => {
       const page = await pdf.getPage(pageNum);
       const canvas = await renderPageToCanvas(page);
 
-      const pattern = await extractPattern(page, canvas);
-      const collection = patternToCollection(pattern);
+      const detected = await extractLabelValue(page, canvas);
+      const slug = detected ? toSlug(detected.label, detected.value) : null;
+      const displayLabel = detected ? toDisplayLabel(detected.label, detected.value) : "Unrecognized";
+      const key = slug || "__unrecognized__";
 
       const blobs = detectBlobs(canvas);
       const { photos, texts } = classifyBlobs(blobs, canvas.width);
@@ -299,11 +413,6 @@ document.getElementById("pdf-input").addEventListener("change", async (e) => {
 
       if (photos.length === 0) {
         row.innerHTML = `⚠️ Page ${pageNum}: no photos detected — skipped`;
-        continue;
-      }
-      if (!collection) {
-        unmapped.push({ page: pageNum, pattern });
-        row.innerHTML = `⚠️ Page ${pageNum}: could not determine period/chapel (found "${pattern || ""}") — skipped`;
         continue;
       }
 
@@ -325,64 +434,105 @@ document.getElementById("pdf-input").addEventListener("change", async (e) => {
         }
       }
 
-      groups[collection] = groups[collection] || [];
+      groups[key] = groups[key] || { slug, label: displayLabel, students: [] };
       let found = 0;
       for (let i = 0; i < pairs.length; i++) {
         if (names[i]) {
-          groups[collection].push({ name: names[i], blob: photoBlobs[i] });
+          groups[key].students.push({ name: names[i], blob: photoBlobs[i] });
           found++;
         } else {
           missing.push({ page: pageNum });
         }
       }
-      row.innerHTML = `✅ Page ${pageNum}: ${collectionLabel(collection)} — ${found} of ${pairs.length} student(s) matched`;
+      row.innerHTML = slug
+        ? `✅ Page ${pageNum}: ${displayLabel} — ${found} of ${pairs.length} student(s) matched`
+        : `⚠️ Page ${pageNum}: could not determine a grouping label — ${found} of ${pairs.length} student(s) matched, added to "Unrecognized"`;
     } catch (err) {
       row.innerHTML = `❌ Page ${pageNum}: ${err.message}`;
     }
   }
 
-  renderImportReview(groups, missing, unmapped);
+  await renderImportReview(groups, missing);
 });
 
-function renderImportReview(groups, missing, unmapped) {
+async function renderImportReview(groups, missing) {
   const container = document.getElementById("import-review");
   container.innerHTML = "";
 
-  if (unmapped.length) {
-    const div = document.createElement("div");
-    div.className = "card";
-    div.innerHTML = `<p class="warn">Some pages couldn't be matched to a period/chapel and were skipped: ${unmapped.map((u) => `page ${u.page}`).join(", ")}.</p>`;
-    container.appendChild(div);
-  }
+  const collections = await loadCollections(true);
 
-  for (const [collection, students] of Object.entries(groups)) {
+  for (const group of Object.values(groups)) {
     const section = document.createElement("div");
     section.className = "import-group card";
-    const thumbs = students.map((s) => {
+
+    const exactMatch = group.slug ? collections.find((c) => c.slug === group.slug) : null;
+    const isUnrecognized = !group.slug;
+
+    const optionsHtml =
+      `<option value="${NEW_COLLECTION_VALUE}">+ Create new collection</option>` +
+      collections.map((c) =>
+        `<option value="${c.id}" ${exactMatch && exactMatch.id === c.id ? "selected" : ""}>${c.label}</option>`
+      ).join("");
+
+    const thumbs = group.students.map((s) => {
       const url = URL.createObjectURL(s.blob);
       return `<div class="roster-item"><img src="${url}" alt="${s.name}"><div class="name">${s.name}</div></div>`;
     }).join("");
+
     section.innerHTML = `
-      <h3>${collectionLabel(collection)} — ${students.length} student(s) found</h3>
-      <p class="warn">Saving will replace the entire "${collectionLabel(collection)}" collection with these ${students.length} students. Check the crops below before saving.</p>
+      <div class="import-group-header">
+        <input type="text" class="import-group-label" placeholder="Name this collection"
+          value="${isUnrecognized ? "" : group.label}" ${exactMatch ? "disabled" : ""}>
+        <select class="import-group-select">${optionsHtml}</select>
+      </div>
+      <p class="warn">${isUnrecognized
+        ? `${group.students.length} student(s) found but no grouping label could be detected for their page(s). Pick an existing collection above, or name a new one, before saving.`
+        : `Saving will replace the entire "${group.label}" collection with these ${group.students.length} students. Check the crops below before saving.`
+      }</p>
       <div class="roster-list">${thumbs}</div>
-      <button class="save-group-btn" style="margin-top:14px;">Save &amp; Replace ${collectionLabel(collection)}</button>
+      <button class="save-group-btn" style="margin-top:14px;">Save &amp; Replace</button>
       <span class="save-status" style="margin-left:10px;"></span>
     `;
-    section.querySelector(".save-group-btn").addEventListener("click", async (e) => {
-      e.target.disabled = true;
+
+    const labelInput = section.querySelector(".import-group-label");
+    const select = section.querySelector(".import-group-select");
+    const saveBtn = section.querySelector(".save-group-btn");
+    if (!exactMatch) select.value = NEW_COLLECTION_VALUE;
+
+    function syncEnabled() {
+      const usingNew = select.value === NEW_COLLECTION_VALUE;
+      labelInput.disabled = !usingNew;
+      saveBtn.disabled = usingNew && !labelInput.value.trim();
+    }
+    select.addEventListener("change", syncEnabled);
+    labelInput.addEventListener("input", syncEnabled);
+    syncEnabled();
+
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true;
       const statusSpan = section.querySelector(".save-status");
       statusSpan.textContent = "Saving…";
       const form = new FormData();
-      form.append("collection", collection);
-      for (const s of students) {
+      if (select.value === NEW_COLLECTION_VALUE) {
+        form.append("newCollectionLabel", labelInput.value.trim());
+      } else {
+        form.append("collectionId", select.value);
+      }
+      for (const s of group.students) {
         form.append("name", s.name);
         form.append("photo", s.blob, "photo.jpg");
       }
       const res = await apiFetch("/api/import/replace-collection", { method: "POST", body: form });
       const data = await res.json();
-      statusSpan.textContent = res.ok ? `Saved ${data.count} students.` : (data.error || "Failed to save");
+      if (!res.ok) {
+        statusSpan.textContent = data.error || "Failed to save";
+        saveBtn.disabled = false;
+        return;
+      }
+      statusSpan.textContent = `Saved ${data.count} students.`;
+      await loadCollections(true);
     });
+
     container.appendChild(section);
   }
 

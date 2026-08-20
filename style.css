@@ -133,6 +133,15 @@ input[type="text"], input[type="password"], select {
 .import-page-status { display: flex; align-items: center; gap: 10px; padding: 6px 0; color: var(--muted); }
 .import-group h3 { margin: 20px 0 6px; }
 .import-group .warn { color: #a15c00; font-size: 0.85rem; }
+.import-group-header { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.import-group-header input { flex: 1; min-width: 160px; }
+.import-group-header select { min-width: 220px; }
+.import-group-label:disabled { background: #f5f6f8; color: var(--muted); }
+
+.user-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
+.user-row-email { font-weight: 600; }
+.user-row-meta { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+.admin-badge { background: var(--accent); color: #fff; font-size: 0.7rem; font-weight: 600; padding: 2px 7px; border-radius: 20px; vertical-align: middle; }
 
 .hidden { display: none !important; }
 .spinner {
