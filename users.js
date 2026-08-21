@@ -26,13 +26,13 @@ async function init() {
     row.innerHTML = `
       <div class="user-row-info">
         <div class="user-row-email">${user.email}${user.is_admin ? ' <span class="admin-badge">Admin</span>' : ""}</div>
-        <div class="user-row-meta">${user.people_count} student${user.people_count === 1 ? "" : "s"} &middot; ${user.collections_count} collection${user.collections_count === 1 ? "" : "s"} &middot; joined ${created}</div>
+        <div class="user-row-meta">${user.decks_count} deck${user.decks_count === 1 ? "" : "s"} &middot; joined ${created}</div>
       </div>
       ${isSelf ? "" : '<button class="danger">Delete Account</button>'}
     `;
     if (!isSelf) {
       row.querySelector("button").addEventListener("click", async () => {
-        if (!confirm(`Permanently delete ${user.email}'s account? This deletes all of their students and photos and cannot be undone.`)) return;
+        if (!confirm(`Permanently delete ${user.email}'s account? This deletes all of their decks and cannot be undone. Their students in the shared master database are unaffected.`)) return;
         const delRes = await apiFetch(`/api/admin/users/${user.id}`, { method: "DELETE" });
         const delData = await delRes.json();
         if (!delRes.ok) {

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Manage Roster — Names & Faces</title>
+<title>Master Database — Names & Faces</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -10,30 +10,30 @@
 <div class="page">
   <div class="topbar">
     <div>
-      <h1>Manage Roster</h1>
-      <p class="subtitle">Import from a PDF, add students one at a time, or manage what's already saved.</p>
+      <h1>Master Database</h1>
+      <p class="subtitle">The whole-school student directory every deck draws its photos from. Admin only.</p>
     </div>
     <div>
-      <a href="users.html" id="manage-users-link" class="hidden">Manage Users</a>
+      <a href="users.html">Manage Users</a>
       &nbsp;&middot;&nbsp;
       <a href="index.html">&larr; Home</a>
     </div>
   </div>
 
   <div class="tabs">
-    <button class="tab-btn active" data-tab="import">Import from PDF</button>
+    <button class="tab-btn active" data-tab="import">Import Roster PDF</button>
     <button class="tab-btn" data-tab="add">Add Student</button>
-    <button class="tab-btn" data-tab="manage">Manage Existing</button>
+    <button class="tab-btn" data-tab="manage">Manage Students</button>
   </div>
 
-  <!-- Import from PDF -->
+  <!-- Import Roster PDF -->
   <div id="tab-import" class="tab-panel">
     <div class="card">
-      <p>Upload a class roster PDF. Each page is scanned to find whatever grouping label is printed at the top (a period, grade level, or gender, for example) plus every student's name and photo. Nothing is saved until you review and confirm below — you can adjust the detected group name or pick an existing one before saving, and importing a group <strong>replaces</strong> everything currently saved for it.</p>
+      <p>Upload the whole-school roster PDF. This <strong>replaces the entire database</strong> — every student currently on file is removed and replaced with what's found in the PDF. Nothing is saved until you review and confirm below.</p>
       <input type="file" id="pdf-input" accept="application/pdf">
       <div id="page-status" style="margin-top:14px;"></div>
     </div>
-
+    <div id="duplicate-resolver"></div>
     <div id="import-review"></div>
   </div>
 
@@ -44,28 +44,19 @@
         <label>Name</label>
         <input type="text" id="add-name" placeholder="Last, First" required>
         <div style="height:10px;"></div>
-        <label>Collection</label>
-        <select id="add-collection" required></select>
-        <div style="height:10px;"></div>
-        <label>Photo</label>
-        <input type="file" id="add-photo" accept="image/*" required>
+        <label>Photo (optional)</label>
+        <input type="file" id="add-photo" accept="image/*">
         <div class="error-msg" id="add-error"></div>
         <button type="submit" style="margin-top:10px;">Add Student</button>
       </form>
     </div>
+    <div id="add-duplicate-resolver"></div>
   </div>
 
-  <!-- Manage Existing -->
+  <!-- Manage Students -->
   <div id="tab-manage" class="tab-panel hidden">
     <div class="card">
-      <label>Collection</label>
-      <select id="manage-collection"></select>
-      <div style="height:10px;"></div>
-      <div style="display:flex; gap:8px;">
-        <button type="button" class="secondary" id="rename-collection-btn">Rename</button>
-        <button type="button" class="danger" id="delete-collection-btn">Delete Collection</button>
-      </div>
-      <div class="error-msg" id="manage-collection-error"></div>
+      <input type="text" id="manage-search" placeholder="Search by name…">
     </div>
     <div class="roster-list" id="manage-list"></div>
   </div>

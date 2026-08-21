@@ -16,7 +16,7 @@
     <div><a href="index.html">&larr; Home</a></div>
   </div>
 
-  <div id="empty-msg" class="card hidden">No students in this collection yet. Add some from <a href="admin.html">Manage Roster</a>.</div>
+  <div id="empty-msg" class="card hidden">No students in this deck yet. Build one from <a href="deck-builder.html">Create New Deck</a>.</div>
 
   <div id="quiz" class="card flashcard hidden">
     <div class="progress" id="progress"></div>
@@ -37,12 +37,10 @@
 requireLogin();
 
 const params = new URLSearchParams(location.search);
-const collectionId = params.get("c") || "all";
-document.getElementById("title").textContent = "Loading…";
+const deckId = params.get("d");
 
-let deck = [];
+let cards = [];
 let index = 0;
-let currentObjectUrl = null;
 
 function shuffle(arr) {
   const a = arr.slice();
@@ -54,42 +52,48 @@ function shuffle(arr) {
 }
 
 async function showCard() {
-  const person = deck[index];
-  document.getElementById("progress").textContent = `Card ${index + 1} of ${deck.length}`;
+  const card = cards[index];
+  document.getElementById("progress").textContent = `Card ${index + 1} of ${cards.length}`;
   document.getElementById("name-display").textContent = "";
   document.getElementById("photo").src = "";
-  if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
-  currentObjectUrl = await fetchPhotoObjectUrl(person.photoUrl);
-  document.getElementById("photo").src = currentObjectUrl;
+  await loadCardImage(document.getElementById("photo"), card);
 }
 
 document.getElementById("reveal-btn").addEventListener("click", () => {
-  document.getElementById("name-display").textContent = deck[index].name;
+  const card = cards[index];
+  document.getElementById("name-display").textContent =
+    card.disambiguator ? `${card.name} (${card.disambiguator})` : card.name;
 });
 
 document.getElementById("next-btn").addEventListener("click", () => {
-  index = (index + 1) % deck.length;
+  index = (index + 1) % cards.length;
   showCard();
 });
 
 document.getElementById("restart-btn").addEventListener("click", () => {
-  deck = shuffle(deck);
+  cards = shuffle(cards);
   index = 0;
   showCard();
 });
 
 async function init() {
-  await loadCollections();
-  document.getElementById("title").textContent = collectionLabel(collectionId);
-
-  const res = await apiFetch(`/api/people?collection=${encodeURIComponent(collectionId)}`);
+  if (!deckId) {
+    document.getElementById("title").textContent = "Deck not found";
+    return;
+  }
+  const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}/cards`);
+  if (!res.ok) {
+    document.getElementById("title").textContent = "Deck not found";
+    return;
+  }
   const data = await res.json();
-  document.getElementById("subtitle").textContent = `${data.people.length} student${data.people.length === 1 ? "" : "s"}`;
-  if (data.people.length === 0) {
+  document.getElementById("title").textContent = data.label;
+  document.getElementById("subtitle").textContent = `${data.cards.length} student${data.cards.length === 1 ? "" : "s"}`;
+  if (data.cards.length === 0) {
     document.getElementById("empty-msg").classList.remove("hidden");
     return;
   }
-  deck = shuffle(data.people);
+  cards = shuffle(data.cards);
   document.getElementById("quiz").classList.remove("hidden");
   showCard();
 }

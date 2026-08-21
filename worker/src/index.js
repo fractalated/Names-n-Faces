@@ -122,8 +122,12 @@ function normalizeEmail(email) {
   return (email || "").toString().trim().toLowerCase();
 }
 
-function slugifyWord(s) {
-  return (s || "").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "");
+// Single source of truth for name matching — used everywhere a
+// master_students.name_key is written or looked up. The client-side
+// deck-builder replicates this exact logic (trim, lowercase, collapse
+// whitespace) and must be kept in sync with it.
+function normalizeNameKey(name) {
+  return (name || "").toString().trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function extFromType(type) {
@@ -131,31 +135,6 @@ function extFromType(type) {
   if (type === "image/webp") return "webp";
   if (type === "image/gif") return "gif";
   return "jpg";
-}
-
-// Resolve a collection by id (must belong to the user), or find-or-create by
-// label (slugified). Returns null if neither a valid id nor a usable label
-// was given. Shared by /api/people (POST) and /api/import/replace-collection
-// so neither route needs to know about a hardcoded collection list anymore.
-async function getOrCreateCollection(db, userId, { collectionId, label }) {
-  if (collectionId) {
-    const row = await db.prepare(
-      "SELECT id, slug, label FROM collections WHERE id = ? AND user_id = ?"
-    ).bind(collectionId, userId).first();
-    return row || null;
-  }
-  const trimmedLabel = (label || "").toString().trim();
-  const slug = slugifyWord(trimmedLabel);
-  if (!slug) return null;
-  const existing = await db.prepare(
-    "SELECT id, slug, label FROM collections WHERE user_id = ? AND slug = ?"
-  ).bind(userId, slug).first();
-  if (existing) return existing;
-  const id = crypto.randomUUID();
-  await db.prepare(
-    "INSERT INTO collections (id, user_id, slug, label, sort_order, created_at) VALUES (?, ?, ?, ?, 0, ?)"
-  ).bind(id, userId, slug, trimmedLabel, Date.now()).run();
-  return { id, slug, label: trimmedLabel };
 }
 
 const OCR_TOOL = {
@@ -206,6 +185,12 @@ async function ocrBatch(env, images, instruction) {
   const toolUse = data.content.find((c) => c.type === "tool_use" && c.name === "report_text_batch");
   if (!toolUse) throw new Error("No structured OCR result returned");
   return toolUse.input.texts;
+}
+
+async function deleteR2KeysChunked(bucket, keys) {
+  for (let i = 0; i < keys.length; i += 1000) {
+    await bucket.delete(keys.slice(i, i + 1000));
+  }
 }
 
 export default {
@@ -262,59 +247,241 @@ export default {
       return json({ email: row ? row.email : null, isAdmin: auth.isAdmin }, 200, env);
     }
 
-    // ---------- Collections ----------
+    // ---------- Master student database (shared, admin-writable, everyone reads) ----------
 
-    if (pathname === "/api/collections" && request.method === "GET") {
+    if (pathname === "/api/master/students" && request.method === "GET") {
       const { results } = await env.DB.prepare(
-        "SELECT id, slug, label, sort_order FROM collections WHERE user_id = ? ORDER BY sort_order, label"
-      ).bind(auth.userId).all();
-      return json({ collections: results }, 200, env);
+        "SELECT id, name, disambiguator, photo_key IS NOT NULL AS has_photo FROM master_students ORDER BY name"
+      ).all();
+      const students = results.map((s) => ({
+        id: s.id,
+        name: s.name,
+        disambiguator: s.disambiguator || null,
+        hasPhoto: !!s.has_photo,
+        photoUrl: s.has_photo ? `/api/master/photo/${s.id}` : null,
+      }));
+      return json({ students }, 200, env);
     }
 
-    if (pathname === "/api/collections" && request.method === "POST") {
-      const { label } = await request.json().catch(() => ({}));
-      const trimmed = (label || "").toString().trim();
-      const slug = slugifyWord(trimmed);
-      if (!slug) return json({ error: "A collection name is required" }, 400, env);
+    if (pathname === "/api/master/import" && request.method === "POST") {
+      if (!auth.isAdmin) return forbidden(env);
+      const form = await request.formData();
+      const mode = (form.get("mode") || "").toString();
+      if (mode !== "replace" && mode !== "append") {
+        return json({ error: "mode must be 'replace' or 'append'" }, 400, env);
+      }
+      const names = form.getAll("name").map((n) => n.toString());
+      const disambiguators = form.getAll("disambiguator").map((d) => d.toString());
+      const photos = form.getAll("photo");
+      if (names.length !== disambiguators.length || names.length !== photos.length) {
+        return json({ error: "name/disambiguator/photo count mismatch" }, 400, env);
+      }
+
+      if (mode === "replace") {
+        const { results } = await env.DB.prepare(
+          "SELECT photo_key FROM master_students WHERE photo_key IS NOT NULL"
+        ).all();
+        await deleteR2KeysChunked(env.PHOTOS, results.map((r) => r.photo_key));
+        await env.DB.prepare("DELETE FROM master_students").run();
+      }
+
+      const now = Date.now();
+      const stmts = [];
+      const inserted = [];
+      for (let i = 0; i < names.length; i++) {
+        const name = names[i].trim();
+        if (!name) continue;
+        const disambiguator = disambiguators[i].trim() || null;
+        const photo = photos[i];
+        const id = crypto.randomUUID();
+        let photoKey = null;
+        if (photo instanceof File && photo.size > 0) {
+          photoKey = `${id}.${extFromType(photo.type)}`;
+          await env.PHOTOS.put(photoKey, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
+        }
+        stmts.push(env.DB.prepare(
+          "INSERT INTO master_students (id, name, name_key, disambiguator, photo_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind(id, name, normalizeNameKey(name), disambiguator, photoKey, now, now));
+        inserted.push({ id, name });
+      }
+      if (stmts.length) await env.DB.batch(stmts);
+      return json({ count: inserted.length, students: inserted }, 200, env);
+    }
+
+    if (pathname === "/api/master/students" && request.method === "POST") {
+      if (!auth.isAdmin) return forbidden(env);
+      const form = await request.formData();
+      const name = (form.get("name") || "").toString().trim();
+      if (!name) return json({ error: "Name is required" }, 400, env);
+      const nameKey = normalizeNameKey(name);
+      const forceDistinct = (form.get("forceDistinct") || "").toString() === "true";
+      let disambiguator = (form.get("disambiguator") || "").toString().trim() || null;
+
       const existing = await env.DB.prepare(
-        "SELECT id FROM collections WHERE user_id = ? AND slug = ?"
-      ).bind(auth.userId, slug).first();
-      if (existing) return json({ error: "A collection with that name already exists" }, 409, env);
+        "SELECT id, name, disambiguator, photo_key IS NOT NULL AS has_photo FROM master_students WHERE name_key = ?"
+      ).bind(nameKey).all();
+
+      if (existing.results.length > 0 && !forceDistinct) {
+        return json({
+          error: "duplicate",
+          candidates: existing.results.map((r) => ({
+            id: r.id, name: r.name, disambiguator: r.disambiguator || null, hasPhoto: !!r.has_photo,
+          })),
+        }, 409, env);
+      }
+      if (forceDistinct && !disambiguator) {
+        return json({ error: "A distinguishing nickname or initial is required for a duplicate name" }, 400, env);
+      }
+
+      const photo = form.get("photo");
       const id = crypto.randomUUID();
+      let photoKey = null;
+      if (photo instanceof File && photo.size > 0) {
+        photoKey = `${id}.${extFromType(photo.type)}`;
+        await env.PHOTOS.put(photoKey, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
+      }
+      const now = Date.now();
       await env.DB.prepare(
-        "INSERT INTO collections (id, user_id, slug, label, sort_order, created_at) VALUES (?, ?, ?, ?, 0, ?)"
-      ).bind(id, auth.userId, slug, trimmed, Date.now()).run();
-      return json({ id, slug, label: trimmed }, 201, env);
+        "INSERT INTO master_students (id, name, name_key, disambiguator, photo_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).bind(id, name, nameKey, disambiguator, photoKey, now, now).run();
+      return json({ id, name, disambiguator, hasPhoto: !!photoKey }, 201, env);
     }
 
-    const collectionMatch = pathname.match(/^\/api\/collections\/([\w-]+)$/);
-    if (collectionMatch && request.method === "PATCH") {
+    const masterStudentMatch = pathname.match(/^\/api\/master\/students\/([\w-]+)$/);
+    if (masterStudentMatch && request.method === "PATCH") {
+      if (!auth.isAdmin) return forbidden(env);
       const row = await env.DB.prepare(
-        "SELECT id FROM collections WHERE id = ? AND user_id = ?"
-      ).bind(collectionMatch[1], auth.userId).first();
+        "SELECT id, photo_key FROM master_students WHERE id = ?"
+      ).bind(masterStudentMatch[1]).first();
       if (!row) return json({ error: "Not found" }, 404, env);
-      const { label } = await request.json().catch(() => ({}));
-      const trimmed = (label || "").toString().trim();
-      if (!trimmed) return json({ error: "A collection name is required" }, 400, env);
+      const form = await request.formData();
+      const sets = [], binds = [];
+      if (form.has("name")) {
+        const name = (form.get("name") || "").toString().trim();
+        if (!name) return json({ error: "Name cannot be blank" }, 400, env);
+        sets.push("name = ?", "name_key = ?");
+        binds.push(name, normalizeNameKey(name));
+      }
+      if (form.has("disambiguator")) {
+        sets.push("disambiguator = ?");
+        binds.push((form.get("disambiguator") || "").toString().trim() || null);
+      }
+      const photo = form.get("photo");
+      if (photo instanceof File && photo.size > 0) {
+        if (row.photo_key) await env.PHOTOS.delete(row.photo_key);
+        const newKey = `${row.id}.${extFromType(photo.type)}`;
+        await env.PHOTOS.put(newKey, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
+        sets.push("photo_key = ?");
+        binds.push(newKey);
+      }
+      if (sets.length === 0) return json({ error: "Nothing to update" }, 400, env);
+      sets.push("updated_at = ?");
+      binds.push(Date.now());
       await env.DB.prepare(
-        "UPDATE collections SET label = ? WHERE id = ? AND user_id = ?"
-      ).bind(trimmed, collectionMatch[1], auth.userId).run();
+        `UPDATE master_students SET ${sets.join(", ")} WHERE id = ?`
+      ).bind(...binds, masterStudentMatch[1]).run();
       return json({ ok: true }, 200, env);
     }
-    if (collectionMatch && request.method === "DELETE") {
+    if (masterStudentMatch && request.method === "DELETE") {
+      if (!auth.isAdmin) return forbidden(env);
       const row = await env.DB.prepare(
-        "SELECT slug FROM collections WHERE id = ? AND user_id = ?"
-      ).bind(collectionMatch[1], auth.userId).first();
-      if (!row) return json({ error: "Not found" }, 404, env);
-      const inUse = await env.DB.prepare(
-        "SELECT COUNT(*) as n FROM people WHERE user_id = ? AND collection = ?"
-      ).bind(auth.userId, row.slug).first();
-      if (inUse.n > 0) {
-        return json({ error: "This collection still has students in it — remove or move them first" }, 409, env);
+        "SELECT photo_key FROM master_students WHERE id = ?"
+      ).bind(masterStudentMatch[1]).first();
+      if (row) {
+        if (row.photo_key) await env.PHOTOS.delete(row.photo_key);
+        // deck_entries referencing this id are left as-is on purpose (soft
+        // reference) — GET /api/decks/:id/cards resolves the dangling
+        // reference to hasPhoto:false instead of erroring.
+        await env.DB.prepare("DELETE FROM master_students WHERE id = ?").bind(masterStudentMatch[1]).run();
       }
-      await env.DB.prepare(
-        "DELETE FROM collections WHERE id = ? AND user_id = ?"
-      ).bind(collectionMatch[1], auth.userId).run();
+      return json({ ok: true }, 200, env);
+    }
+
+    const masterPhotoMatch = pathname.match(/^\/api\/master\/photo\/([\w-]+)$/);
+    if (masterPhotoMatch && request.method === "GET") {
+      const row = await env.DB.prepare(
+        "SELECT photo_key FROM master_students WHERE id = ?"
+      ).bind(masterPhotoMatch[1]).first();
+      if (!row || !row.photo_key) return json({ error: "Not found" }, 404, env);
+      const object = await env.PHOTOS.get(row.photo_key);
+      if (!object) return json({ error: "Not found" }, 404, env);
+      return new Response(object.body, {
+        headers: {
+          "Content-Type": object.httpMetadata?.contentType || "application/octet-stream",
+          ...corsHeaders(env),
+        },
+      });
+    }
+
+    // ---------- Decks (per-user, reference the shared master database) ----------
+
+    if (pathname === "/api/decks" && request.method === "GET") {
+      const { results } = await env.DB.prepare(`
+        SELECT d.id, d.label, d.created_at,
+          (SELECT COUNT(*) FROM deck_entries WHERE deck_entries.deck_id = d.id) AS entry_count
+        FROM decks d WHERE d.user_id = ? ORDER BY d.created_at DESC
+      `).bind(auth.userId).all();
+      const decks = results.map((d) => ({ id: d.id, label: d.label, entryCount: d.entry_count, createdAt: d.created_at }));
+      return json({ decks }, 200, env);
+    }
+
+    if (pathname === "/api/decks" && request.method === "POST") {
+      const { label, entries } = await request.json().catch(() => ({}));
+      const trimmedLabel = (label || "").toString().trim();
+      if (!trimmedLabel) return json({ error: "A deck name is required" }, 400, env);
+      if (!Array.isArray(entries) || entries.length === 0) {
+        return json({ error: "At least one name is required" }, 400, env);
+      }
+      const deckId = crypto.randomUUID();
+      const now = Date.now();
+      const stmts = [env.DB.prepare(
+        "INSERT INTO decks (id, user_id, label, created_at) VALUES (?, ?, ?, ?)"
+      ).bind(deckId, auth.userId, trimmedLabel, now)];
+      for (const e of entries) {
+        const rawName = ((e && e.rawName) || "").toString().trim();
+        if (!rawName) continue;
+        const masterStudentId = (e && e.masterStudentId) || null;
+        stmts.push(env.DB.prepare(
+          "INSERT INTO deck_entries (id, deck_id, raw_name_text, master_student_id, created_at) VALUES (?, ?, ?, ?, ?)"
+        ).bind(crypto.randomUUID(), deckId, rawName, masterStudentId, now));
+      }
+      await env.DB.batch(stmts);
+      return json({ id: deckId, label: trimmedLabel }, 201, env);
+    }
+
+    const deckCardsMatch = pathname.match(/^\/api\/decks\/([\w-]+)\/cards$/);
+    if (deckCardsMatch && request.method === "GET") {
+      const deck = await env.DB.prepare(
+        "SELECT id, label FROM decks WHERE id = ? AND user_id = ?"
+      ).bind(deckCardsMatch[1], auth.userId).first();
+      if (!deck) return json({ error: "Not found" }, 404, env);
+      const { results } = await env.DB.prepare(`
+        SELECT de.id AS entry_id, de.raw_name_text, ms.id AS master_id, ms.name AS master_name,
+               ms.disambiguator, ms.photo_key IS NOT NULL AS has_photo
+        FROM deck_entries de LEFT JOIN master_students ms ON de.master_student_id = ms.id
+        WHERE de.deck_id = ? ORDER BY de.created_at
+      `).bind(deckCardsMatch[1]).all();
+      const cards = results.map((r) => ({
+        id: r.entry_id,
+        name: r.master_name || r.raw_name_text,
+        disambiguator: r.disambiguator || null,
+        hasPhoto: !!r.has_photo,
+        photoUrl: r.master_id ? `/api/master/photo/${r.master_id}` : null,
+      }));
+      return json({ label: deck.label, cards }, 200, env);
+    }
+
+    const deckMatch = pathname.match(/^\/api\/decks\/([\w-]+)$/);
+    if (deckMatch && request.method === "DELETE") {
+      const row = await env.DB.prepare(
+        "SELECT id FROM decks WHERE id = ? AND user_id = ?"
+      ).bind(deckMatch[1], auth.userId).first();
+      if (row) {
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM deck_entries WHERE deck_id = ?").bind(deckMatch[1]),
+          env.DB.prepare("DELETE FROM decks WHERE id = ? AND user_id = ?").bind(deckMatch[1], auth.userId),
+        ]);
+      }
       return json({ ok: true }, 200, env);
     }
 
@@ -324,8 +491,7 @@ export default {
       if (!auth.isAdmin) return forbidden(env);
       const { results } = await env.DB.prepare(`
         SELECT u.id, u.email, u.is_admin, u.created_at,
-          (SELECT COUNT(*) FROM people WHERE people.user_id = u.id) AS people_count,
-          (SELECT COUNT(*) FROM collections WHERE collections.user_id = u.id) AS collections_count
+          (SELECT COUNT(*) FROM decks WHERE decks.user_id = u.id) AS decks_count
         FROM users u ORDER BY u.created_at
       `).all();
       return json({ users: results }, 200, env);
@@ -341,24 +507,20 @@ export default {
       const targetUser = await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(targetId).first();
       if (!targetUser) return json({ error: "Not found" }, 404, env);
 
-      const { results: photoRows } = await env.DB.prepare(
-        "SELECT photo_key FROM people WHERE user_id = ?"
-      ).bind(targetId).all();
-      const keys = photoRows.map((r) => r.photo_key);
-      for (let i = 0; i < keys.length; i += 1000) {
-        await env.PHOTOS.delete(keys.slice(i, i + 1000));
-      }
-      // Explicit ordered deletes rather than relying on D1's SQLite FK cascade,
-      // which isn't reliably enforced across requests.
+      // Deleting a user only removes their own decks/deck_entries — never
+      // master_students, which is shared, admin-owned data not tied to any
+      // one user.
       await env.DB.batch([
-        env.DB.prepare("DELETE FROM people WHERE user_id = ?").bind(targetId),
-        env.DB.prepare("DELETE FROM collections WHERE user_id = ?").bind(targetId),
+        env.DB.prepare(
+          "DELETE FROM deck_entries WHERE deck_id IN (SELECT id FROM decks WHERE user_id = ?)"
+        ).bind(targetId),
+        env.DB.prepare("DELETE FROM decks WHERE user_id = ?").bind(targetId),
         env.DB.prepare("DELETE FROM users WHERE id = ?").bind(targetId),
       ]);
       return json({ ok: true }, 200, env);
     }
 
-    // ---------- PDF import ----------
+    // ---------- OCR (used by the master-import and deck-builder pipelines) ----------
 
     if (pathname === "/api/import/ocr-batch" && request.method === "POST") {
       const { images, instruction } = await request.json().catch(() => ({}));
@@ -371,128 +533,6 @@ export default {
       } catch (err) {
         return json({ error: err.message || "OCR failed" }, 502, env);
       }
-    }
-
-    if (pathname === "/api/import/replace-collection" && request.method === "POST") {
-      const form = await request.formData();
-      const collectionId = (form.get("collectionId") || "").toString().trim() || null;
-      const newCollectionLabel = (form.get("newCollectionLabel") || "").toString().trim();
-      const collection = await getOrCreateCollection(env.DB, auth.userId, {
-        collectionId, label: newCollectionLabel,
-      });
-      if (!collection) {
-        return json({ error: "Pick an existing collection or name a new one" }, 400, env);
-      }
-      const names = form.getAll("name").map((n) => n.toString());
-      const photos = form.getAll("photo");
-      if (names.length !== photos.length) {
-        return json({ error: "name/photo count mismatch" }, 400, env);
-      }
-
-      const existing = await env.DB.prepare(
-        "SELECT photo_key FROM people WHERE user_id = ? AND collection = ?"
-      ).bind(auth.userId, collection.slug).all();
-      for (const row of existing.results) {
-        await env.PHOTOS.delete(row.photo_key);
-      }
-      await env.DB.prepare(
-        "DELETE FROM people WHERE user_id = ? AND collection = ?"
-      ).bind(auth.userId, collection.slug).run();
-
-      const inserted = [];
-      for (let i = 0; i < names.length; i++) {
-        const name = names[i].trim();
-        const photo = photos[i];
-        if (!name || !(photo instanceof File)) continue;
-        const id = crypto.randomUUID();
-        const key = `${id}.${extFromType(photo.type)}`;
-        await env.PHOTOS.put(key, await photo.arrayBuffer(), {
-          httpMetadata: { contentType: photo.type },
-        });
-        await env.DB.prepare(
-          "INSERT INTO people (id, name, photo_key, collection, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-        ).bind(id, name, key, collection.slug, auth.userId, Date.now()).run();
-        inserted.push({ id, name });
-      }
-      return json({
-        collection: { id: collection.id, slug: collection.slug, label: collection.label },
-        count: inserted.length,
-        people: inserted,
-      }, 200, env);
-    }
-
-    // ---------- People ----------
-
-    if (pathname === "/api/people" && request.method === "GET") {
-      const collectionParam = url.searchParams.get("collection");
-      const query = collectionParam && collectionParam !== "all"
-        ? env.DB.prepare(
-            "SELECT id, name, collection FROM people WHERE user_id = ? AND collection = ? ORDER BY created_at DESC"
-          ).bind(auth.userId, collectionParam)
-        : env.DB.prepare(
-            "SELECT id, name, collection FROM people WHERE user_id = ? ORDER BY created_at DESC"
-          ).bind(auth.userId);
-      const { results } = await query.all();
-      const people = results.map((p) => ({
-        id: p.id, name: p.name, collection: p.collection, photoUrl: `/api/photo/${p.id}`,
-      }));
-      return json({ people }, 200, env);
-    }
-
-    if (pathname === "/api/people" && request.method === "POST") {
-      const form = await request.formData();
-      const name = (form.get("name") || "").toString().trim();
-      const photo = form.get("photo");
-      const collectionId = (form.get("collectionId") || "").toString().trim() || null;
-      const newCollectionLabel = (form.get("newCollectionLabel") || "").toString().trim();
-      if (!name || !(photo instanceof File)) {
-        return json({ error: "Name and photo are required" }, 400, env);
-      }
-      const collection = await getOrCreateCollection(env.DB, auth.userId, {
-        collectionId, label: newCollectionLabel,
-      });
-      if (!collection) {
-        return json({ error: "Pick an existing collection or name a new one" }, 400, env);
-      }
-      const id = crypto.randomUUID();
-      const key = `${id}.${extFromType(photo.type)}`;
-      await env.PHOTOS.put(key, await photo.arrayBuffer(), {
-        httpMetadata: { contentType: photo.type },
-      });
-      await env.DB.prepare(
-        "INSERT INTO people (id, name, photo_key, collection, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-      ).bind(id, name, key, collection.slug, auth.userId, Date.now()).run();
-      return json({ id, name, collection: collection.slug, photoUrl: `/api/photo/${id}` }, 201, env);
-    }
-
-    const photoMatch = pathname.match(/^\/api\/photo\/([\w-]+)$/);
-    if (photoMatch && request.method === "GET") {
-      const row = await env.DB.prepare(
-        "SELECT photo_key FROM people WHERE id = ? AND user_id = ?"
-      ).bind(photoMatch[1], auth.userId).first();
-      if (!row) return json({ error: "Not found" }, 404, env);
-      const object = await env.PHOTOS.get(row.photo_key);
-      if (!object) return json({ error: "Not found" }, 404, env);
-      return new Response(object.body, {
-        headers: {
-          "Content-Type": object.httpMetadata?.contentType || "application/octet-stream",
-          ...corsHeaders(env),
-        },
-      });
-    }
-
-    const personMatch = pathname.match(/^\/api\/people\/([\w-]+)$/);
-    if (personMatch && request.method === "DELETE") {
-      const row = await env.DB.prepare(
-        "SELECT photo_key FROM people WHERE id = ? AND user_id = ?"
-      ).bind(personMatch[1], auth.userId).first();
-      if (row) {
-        await env.PHOTOS.delete(row.photo_key);
-        await env.DB.prepare(
-          "DELETE FROM people WHERE id = ? AND user_id = ?"
-        ).bind(personMatch[1], auth.userId).run();
-      }
-      return json({ ok: true }, 200, env);
     }
 
     return json({ error: "Not found" }, 404, env);

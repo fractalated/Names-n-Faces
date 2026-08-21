@@ -1,11 +1,11 @@
 requireLogin();
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
-const NEW_COLLECTION_VALUE = "__new__";
-
 (async () => {
   const me = await loadMe();
-  document.getElementById("manage-users-link").classList.toggle("hidden", !me.isAdmin);
+  if (!me.isAdmin) {
+    location.href = "index.html";
+  }
 })();
 
 // ---------- Tabs ----------
@@ -15,315 +15,184 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     btn.classList.add("active");
     document.getElementById("tab-" + btn.dataset.tab).classList.remove("hidden");
-    if (btn.dataset.tab === "add") await fillAddCollectionSelect();
-    if (btn.dataset.tab === "manage") { await fillManageCollectionSelect(); await loadManageList(); }
+    if (btn.dataset.tab === "manage") await loadManageList();
   });
 });
 
-// ---------- Collection selects ----------
-// Every user has their own independent, dynamic set of collections now (no
-// more fixed Period 1-9/Chapel list) — selects are populated from
-// GET /api/collections and refreshed whenever a collection may have changed.
-
-async function fillAddCollectionSelect() {
-  const select = document.getElementById("add-collection");
-  const collections = await loadCollections();
-  select.innerHTML =
-    collections.map((c) => `<option value="${c.id}">${c.label}</option>`).join("") +
-    `<option value="${NEW_COLLECTION_VALUE}">+ New collection...</option>`;
+// Must match normalizeNameKey in worker/src/index.js exactly — this is the
+// single normalization rule name-matching depends on everywhere.
+function normalizeNameKey(name) {
+  return (name || "").toString().trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-async function fillManageCollectionSelect() {
-  const select = document.getElementById("manage-collection");
-  const collections = await loadCollections();
-  select.innerHTML =
-    `<option value="all">All Collections</option>` +
-    collections.map((c) => `<option value="${c.slug}">${c.label}</option>`).join("");
+// Center-crop the largest square out of the source image, then scale to a
+// fixed, phone-friendly size. Applied to every photo before it's uploaded —
+// from PDF extraction or a manual single add alike — so storage stays small
+// and every card looks consistent regardless of the source photo's shape.
+async function cropToSquare(blob, targetSize = 320) {
+  const img = await createImageBitmap(blob);
+  const side = Math.min(img.width, img.height);
+  const sx = (img.width - side) / 2;
+  const sy = (img.height - side) / 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = targetSize;
+  canvas.height = targetSize;
+  canvas.getContext("2d").drawImage(img, sx, sy, side, side, 0, 0, targetSize, targetSize);
+  img.close?.();
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
 }
 
 // ---------- Add Student ----------
+
+async function showAddDuplicatePrompt(candidates, name) {
+  return new Promise((resolve) => {
+    const container = document.getElementById("add-duplicate-resolver");
+    container.innerHTML = "";
+    const card = document.createElement("div");
+    card.className = "card";
+    const thumbs = candidates.map((c, i) => `
+      <div class="roster-item">
+        <img alt="${c.name}" data-idx="${i}">
+        <div class="name">${c.name}${c.disambiguator ? ` (${c.disambiguator})` : ""}</div>
+      </div>
+    `).join("");
+    card.innerHTML = `
+      <p class="warn">"${name}" already exists in the database:</p>
+      <div class="roster-list">${thumbs}</div>
+      <p>If this is a different person, give them a nickname or initial so they can be told apart:</p>
+      <input type="text" id="add-dup-disambig" placeholder='e.g. J.R., or "Johnny"'>
+      <div style="height:10px;"></div>
+      <div style="display:flex; gap:8px;">
+        <button type="button" id="add-dup-confirm" class="secondary">Add as a Different Person</button>
+        <button type="button" id="add-dup-cancel" class="secondary">Cancel</button>
+      </div>
+    `;
+    container.appendChild(card);
+
+    card.querySelectorAll(".roster-item img").forEach((img, i) => {
+      if (candidates[i].hasPhoto) fetchPhotoObjectUrl(candidates[i].photoUrl).then((url) => { img.src = url; });
+      else img.src = PLACEHOLDER_SILHOUETTE_SVG;
+    });
+
+    document.getElementById("add-dup-cancel").addEventListener("click", () => {
+      container.innerHTML = "";
+      resolve(null);
+    });
+    document.getElementById("add-dup-confirm").addEventListener("click", () => {
+      const disambiguator = document.getElementById("add-dup-disambig").value.trim();
+      if (!disambiguator) {
+        alert("A nickname or initial is required to add a different person with the same name.");
+        return;
+      }
+      container.innerHTML = "";
+      resolve(disambiguator);
+    });
+  });
+}
+
 document.getElementById("add-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const errorEl = document.getElementById("add-error");
   errorEl.textContent = "";
-  const select = document.getElementById("add-collection");
+  document.getElementById("add-duplicate-resolver").innerHTML = "";
 
-  const form = new FormData();
-  form.append("name", document.getElementById("add-name").value);
-  if (select.value === NEW_COLLECTION_VALUE) {
-    const label = prompt('Name this new collection (e.g. "Period 3", "Freshman", "Female"):');
-    if (!label || !label.trim()) return;
-    form.append("newCollectionLabel", label.trim());
-  } else {
-    form.append("collectionId", select.value);
-  }
-  form.append("photo", document.getElementById("add-photo").files[0]);
+  const name = document.getElementById("add-name").value.trim();
+  const photoFile = document.getElementById("add-photo").files[0] || null;
 
-  const res = await apiFetch("/api/people", { method: "POST", body: form });
-  const data = await res.json();
-  if (!res.ok) {
-    errorEl.textContent = data.error || "Could not add student";
-    return;
+  async function submit(disambiguator, forceDistinct) {
+    const form = new FormData();
+    form.append("name", name);
+    if (disambiguator) form.append("disambiguator", disambiguator);
+    if (forceDistinct) form.append("forceDistinct", "true");
+    if (photoFile) form.append("photo", await cropToSquare(photoFile), "photo.jpg");
+    const res = await apiFetch("/api/master/students", { method: "POST", body: form });
+    const data = await res.json();
+    if (res.status === 409) {
+      const chosen = await showAddDuplicatePrompt(data.candidates, name);
+      if (chosen) await submit(chosen, true);
+      return;
+    }
+    if (!res.ok) {
+      errorEl.textContent = data.error || "Could not add student";
+      return;
+    }
+    document.getElementById("add-form").reset();
   }
-  document.getElementById("add-form").reset();
-  await loadCollections(true);
-  await fillAddCollectionSelect();
+  await submit(null, false);
 });
 
-// ---------- Manage Existing ----------
-const manageSelect = document.getElementById("manage-collection");
-manageSelect.addEventListener("change", loadManageList);
+// ---------- Manage Students ----------
+
+let allMasterStudents = [];
 
 async function loadManageList() {
-  const list = document.getElementById("manage-list");
-  list.innerHTML = "<p>Loading…</p>";
-  const res = await apiFetch(`/api/people?collection=${encodeURIComponent(manageSelect.value)}`);
+  const res = await apiFetch("/api/master/students");
   const data = await res.json();
-  if (data.people.length === 0) {
-    list.innerHTML = "<p>No students in this collection.</p>";
+  allMasterStudents = data.students;
+  renderManageList();
+}
+
+function renderManageList() {
+  const query = document.getElementById("manage-search").value.trim().toLowerCase();
+  const list = document.getElementById("manage-list");
+  const filtered = query
+    ? allMasterStudents.filter((s) => s.name.toLowerCase().includes(query))
+    : allMasterStudents;
+  if (filtered.length === 0) {
+    list.innerHTML = "<p>No students found.</p>";
     return;
   }
   list.innerHTML = "";
-  for (const person of data.people) {
+  for (const s of filtered) {
     const item = document.createElement("div");
     item.className = "roster-item";
-    item.innerHTML = `<img alt="${person.name}"><div class="name">${person.name}</div><button class="danger">Delete</button>`;
-    fetchPhotoObjectUrl(person.photoUrl).then((url) => { item.querySelector("img").src = url; });
-    item.querySelector("button").addEventListener("click", async () => {
-      if (!confirm(`Delete ${person.name}?`)) return;
-      await apiFetch(`/api/people/${person.id}`, { method: "DELETE" });
-      loadManageList();
+    item.innerHTML = `
+      <img alt="${s.name}">
+      <div class="name">${s.name}${s.disambiguator ? ` (${s.disambiguator})` : ""}</div>
+      <div style="display:flex; gap:6px; justify-content:center; margin-top:4px;">
+        <button type="button" class="secondary edit-btn">Edit</button>
+        <button type="button" class="danger delete-btn">Delete</button>
+      </div>
+    `;
+    const img = item.querySelector("img");
+    if (s.hasPhoto) fetchPhotoObjectUrl(s.photoUrl).then((url) => { img.src = url; });
+    else img.src = PLACEHOLDER_SILHOUETTE_SVG;
+
+    item.querySelector(".edit-btn").addEventListener("click", async () => {
+      const newName = prompt("Name:", s.name);
+      if (newName === null || !newName.trim()) return;
+      const newDisambig = prompt("Nickname/initial (leave blank for none):", s.disambiguator || "");
+      if (newDisambig === null) return;
+      const form = new FormData();
+      form.append("name", newName.trim());
+      form.append("disambiguator", newDisambig.trim());
+      const res = await apiFetch(`/api/master/students/${s.id}`, { method: "PATCH", body: form });
+      if (!res.ok) {
+        alert((await res.json()).error || "Could not update student");
+        return;
+      }
+      await loadManageList();
     });
+
+    item.querySelector(".delete-btn").addEventListener("click", async () => {
+      if (!confirm(`Delete ${s.name}? Any decks referencing them will show a placeholder photo instead.`)) return;
+      await apiFetch(`/api/master/students/${s.id}`, { method: "DELETE" });
+      await loadManageList();
+    });
+
     list.appendChild(item);
   }
 }
 
-document.getElementById("rename-collection-btn").addEventListener("click", async () => {
-  const errorEl = document.getElementById("manage-collection-error");
-  errorEl.textContent = "";
-  if (manageSelect.value === "all") {
-    errorEl.textContent = "Pick a specific collection to rename.";
-    return;
-  }
-  const collections = await loadCollections();
-  const current = collections.find((c) => c.slug === manageSelect.value);
-  if (!current) return;
-  const label = prompt("New name for this collection:", current.label);
-  if (!label || !label.trim() || label.trim() === current.label) return;
-  const res = await apiFetch(`/api/collections/${current.id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label: label.trim() }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    errorEl.textContent = data.error || "Could not rename collection";
-    return;
-  }
-  await loadCollections(true);
-  await fillManageCollectionSelect();
-  manageSelect.value = current.slug;
-  await fillAddCollectionSelect();
-});
-
-document.getElementById("delete-collection-btn").addEventListener("click", async () => {
-  const errorEl = document.getElementById("manage-collection-error");
-  errorEl.textContent = "";
-  if (manageSelect.value === "all") {
-    errorEl.textContent = "Pick a specific collection to delete.";
-    return;
-  }
-  const collections = await loadCollections();
-  const current = collections.find((c) => c.slug === manageSelect.value);
-  if (!current) return;
-  if (!confirm(`Delete the "${current.label}" collection? This only works if it has no students in it.`)) return;
-  const res = await apiFetch(`/api/collections/${current.id}`, { method: "DELETE" });
-  const data = await res.json();
-  if (!res.ok) {
-    errorEl.textContent = data.error || "Could not delete collection";
-    return;
-  }
-  await loadCollections(true);
-  await fillManageCollectionSelect();
-  await fillAddCollectionSelect();
-  loadManageList();
-});
-
-(async () => {
-  await fillAddCollectionSelect();
-  await fillManageCollectionSelect();
-  await loadManageList();
-})();
+document.getElementById("manage-search").addEventListener("input", renderManageList);
 
 // ---------- PDF Import ----------
 // Strategy: detect photo/name regions deterministically from pixel data (color
 // photos on a white background, separated by whitespace), then only use AI to
-// read the small, already-cropped name snippets and (as a last resort) a
-// header region with no real text layer. AI is never used to locate anything.
-//
-// Header field detection is a two-pass, user-confirmed process:
-//   1. Scan every page's header text (real text layer; OCR only as a
-//      fallback) for every "Label: Value" pair AND every distinct bare text
-//      chunk, each kept isolated to its own visual line/column position.
-//      This deliberately surfaces MULTIPLE candidate fields per page (e.g.
-//      both "Room: 110" and "Pattern: 3") instead of guessing one — an
-//      earlier version joined the whole header into one string and ran a
-//      single regex over it, which let the match bridge across unrelated
-//      columns (e.g. pairing "Room" with the neighboring column's value) and
-//      silently merged distinct classes that happened to share a room.
-//   2. Show the user every candidate field found, ranked by how well it
-//      discriminates between pages, and let them pick which one identifies
-//      a group and what to call it. This is the one deliberate prompt in
-//      the pipeline — everything else stays automatic.
-
-function slugifyWord(s) {
-  return (s || "").toString().toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "");
-}
-
-function toSlug(fieldName, value) {
-  return `${slugifyWord(fieldName)}-${slugifyWord(value)}`;
-}
-
-function toDisplayLabel(fieldName, value) {
-  const titleCase = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
-  if (/^\d+$/.test(value)) {
-    return `${titleCase(fieldName)} ${value}`; // "Period" + "3" -> "Period 3"
-  }
-  return titleCase(value); // "Grade" + "Freshman" -> "Freshman"
-}
-
-const LABEL_VALUE_RE = /^([A-Za-z][A-Za-z ]{0,20}):\s*(.+)$/;
-
-// Groups a page's top-of-header text items into visual lines (top to
-// bottom) and, within each line, into chunks (left to right) — merging
-// items only when they're on the same line and close together horizontally.
-// Header fields that share a horizontal band (e.g. class name / room /
-// teacher name, all on one row) stay isolated to their own chunk instead of
-// bridging into one string, since the gap between columns (~100pt on a
-// typical roster) is far larger than the gap between pieces of one field.
-async function getHeaderLines(page) {
-  const content = await page.getTextContent();
-  const viewBox = page.view; // [x0, y0, x1, y1] in PDF points
-  const pageHeight = viewBox[3] - viewBox[1];
-  const topThreshold = viewBox[1] + pageHeight * 0.78;
-  const items = content.items
-    .filter((item) => item.transform[5] >= topThreshold && item.str.trim())
-    .map((item) => ({ text: item.str, x0: item.transform[4], x1: item.transform[4] + (item.width || 0), y: item.transform[5] }));
-
-  const LINE_TOLERANCE = 3;
-  const lines = [];
-  for (const item of items) {
-    let line = lines.find((l) => Math.abs(l.y - item.y) <= LINE_TOLERANCE);
-    if (!line) { line = { y: item.y, items: [] }; lines.push(line); }
-    line.items.push(item);
-  }
-  lines.sort((a, b) => b.y - a.y);
-
-  const GAP_MERGE_THRESHOLD = 20;
-  return lines.map((line) => {
-    const sorted = [...line.items].sort((a, b) => a.x0 - b.x0);
-    const chunks = [];
-    for (const item of sorted) {
-      const last = chunks[chunks.length - 1];
-      if (last && (item.x0 - last.x1) <= GAP_MERGE_THRESHOLD) {
-        last.text = (last.text + " " + item.text).replace(/\s+/g, " ").trim();
-        last.x1 = item.x1;
-      } else {
-        chunks.push({ text: item.text.trim(), x0: item.x0, x1: item.x1 });
-      }
-    }
-    return chunks;
-  });
-}
-
-// Every chunk becomes a candidate field. "Label: Value" chunks are keyed by
-// the label text, so the same field aggregates across pages even if its
-// exact pixel position drifts slightly. Chunks with no colon (e.g. a class
-// name printed with no explicit label) are keyed by line/column position —
-// a relative position within THIS page, not an absolute pixel coordinate,
-// so small rendering jitter between pages can't split one field into two.
-function extractCandidatesFromLines(lines) {
-  const candidates = [];
-  lines.forEach((lineChunks, lineIndex) => {
-    lineChunks.forEach((chunk, colIndex) => {
-      if (!chunk.text) return;
-      const m = LABEL_VALUE_RE.exec(chunk.text);
-      if (m) {
-        candidates.push({ kind: "labeled", key: `label:${m[1].trim().toLowerCase()}`, label: m[1].trim(), value: m[2].trim() });
-      } else {
-        candidates.push({ kind: "bare", key: `pos:${lineIndex}:${colIndex}`, label: null, value: chunk.text });
-      }
-    });
-  });
-  return candidates;
-}
-
-async function ocrHeaderFallback(canvas) {
-  const headerBlob = await cropPixelRect(canvas, { x0: 0, y0: 0, x1: canvas.width, y1: canvas.height * 0.22 });
-  const texts = await ocrBatch(
-    [{ blob: headerBlob, mediaType: "image/jpeg" }],
-    "Read the short classification label printed near the top of this school class roster page — it identifies what group these students belong to (for example a period number, a grade level, or a gender). Respond with the label word and its value separated by a colon, e.g. 'Period: 3' or 'Grade: Freshman'. If no such label is visible, respond with 'NONE'."
-  );
-  const text = (texts[0] || "").trim();
-  if (!text || text.toUpperCase() === "NONE") return [];
-  const m = LABEL_VALUE_RE.exec(text);
-  return m
-    ? [{ kind: "labeled", key: `label:${m[1].trim().toLowerCase()}`, label: m[1].trim(), value: m[2].trim() }]
-    : [{ kind: "bare", key: "pos:ocr:0", label: null, value: text }];
-}
-
-// Scans every page's header and returns each page's candidate fields.
-// Cheap (real text layer) for every page except ones with no text layer at
-// all, which fall back to a render + OCR read of the cropped header region.
-async function scanHeaderCandidates(pdf, statusEl) {
-  const perPage = [];
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const row = document.createElement("div");
-    row.className = "import-page-status";
-    row.innerHTML = `<span class="spinner"></span> Scanning header on page ${pageNum} of ${pdf.numPages}…`;
-    statusEl.appendChild(row);
-
-    const page = await pdf.getPage(pageNum);
-    const lines = await getHeaderLines(page);
-    let candidates = extractCandidatesFromLines(lines);
-    if (candidates.length === 0) {
-      const canvas = await renderPageToCanvas(page);
-      candidates = await ocrHeaderFallback(canvas);
-    }
-    perPage.push({ pageNum, candidates });
-    row.innerHTML = candidates.length
-      ? `✅ Page ${pageNum}: found ${candidates.length} header field(s)`
-      : `⚠️ Page ${pageNum}: no header fields detected`;
-  }
-  return perPage;
-}
-
-// Ranks candidate fields by how well they discriminate between pages —
-// favoring a different value on nearly every page (like a period number)
-// over one that repeats across several pages (like a shared room number),
-// which is exactly the distinction that was getting lost before.
-function rankCandidates(perPageCandidates, totalPages) {
-  const byKey = new Map();
-  for (const { pageNum, candidates } of perPageCandidates) {
-    for (const c of candidates) {
-      if (!byKey.has(c.key)) byKey.set(c.key, { key: c.key, kind: c.kind, label: c.label, valuesByPage: new Map() });
-      byKey.get(c.key).valuesByPage.set(pageNum, c.value);
-    }
-  }
-  return [...byKey.values()]
-    .map((c) => {
-      const distinctValues = new Set(c.valuesByPage.values());
-      return { ...c, pagesCovered: c.valuesByPage.size, distinctCount: distinctValues.size, exampleValues: [...distinctValues] };
-    })
-    .filter((c) => c.pagesCovered >= Math.min(2, totalPages) && (totalPages === 1 || c.distinctCount >= 2))
-    .sort((a, b) => {
-      if (b.pagesCovered !== a.pagesCovered) return b.pagesCovered - a.pagesCovered;
-      const ratioA = a.distinctCount / a.pagesCovered, ratioB = b.distinctCount / b.pagesCovered;
-      if (ratioB !== ratioA) return ratioB - ratioA;
-      if (a.kind !== b.kind) return a.kind === "labeled" ? -1 : 1;
-      return 0;
-    });
-}
+// read the small, already-cropped name snippets. AI is never used to locate
+// anything. This whole-school roster has no grouping to detect (unlike the
+// old per-class imports) — every page is scanned the same way and every
+// student found goes straight into one flat database.
 
 async function renderPageToCanvas(page, targetWidth = 1600) {
   const viewport1 = page.getViewport({ scale: 1 });
@@ -494,93 +363,16 @@ function pairPhotosWithNames(photos, texts) {
   });
 }
 
-document.getElementById("pdf-input").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  document.getElementById("import-review").innerHTML = "";
-  const statusEl = document.getElementById("page-status");
-  statusEl.innerHTML = "";
-
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-  const perPageCandidates = await scanHeaderCandidates(pdf, statusEl);
-  const ranked = rankCandidates(perPageCandidates, pdf.numPages);
-
-  renderFieldPicker(pdf, perPageCandidates, ranked);
-});
-
-function renderFieldPicker(pdf, perPageCandidates, ranked) {
-  const container = document.getElementById("import-review");
-  container.innerHTML = "";
-
-  const section = document.createElement("div");
-  section.className = "card";
-
-  if (ranked.length === 0) {
-    section.innerHTML = `
-      <h3>Choose what identifies each group</h3>
-      <p class="warn">Couldn't automatically detect a repeating header field on these pages. You can still import — every student will need to be assigned to a collection manually afterward from the "Add Student" tab.</p>
-      <button id="field-picker-continue">Continue Without Grouping</button>
-    `;
-    container.appendChild(section);
-    document.getElementById("field-picker-continue").addEventListener("click", () => {
-      runFullImport(pdf, perPageCandidates, null, null);
-    });
-    return;
-  }
-
-  const optionsHtml = ranked.map((c, i) => {
-    const exampleText = c.exampleValues.slice(0, 6).join(", ") + (c.exampleValues.length > 6 ? ", …" : "");
-    const coverageNote = c.pagesCovered < pdf.numPages ? ` — found on ${c.pagesCovered} of ${pdf.numPages} pages` : "";
-    return `
-      <label class="field-picker-option">
-        <input type="radio" name="field-picker" value="${i}" ${i === 0 ? "checked" : ""}>
-        <span><strong>${c.label || "Unlabeled text"}</strong>${coverageNote}: ${exampleText}</span>
-      </label>
-    `;
-  }).join("");
-
-  section.innerHTML = `
-    <h3>Choose what identifies each group</h3>
-    <p>These fields were found near the top of your PDF's pages. Pick the one that should split students into collections, then say what to call it.</p>
-    <div class="field-picker-options">${optionsHtml}</div>
-    <div style="height:10px;"></div>
-    <label>Call this field:</label>
-    <input type="text" id="field-picker-name" value="${ranked[0].label || ""}" placeholder="e.g. Period, Grade, Gender">
-    <div class="error-msg" id="field-picker-error"></div>
-    <button id="field-picker-continue" style="margin-top:10px;">Continue Import</button>
-  `;
-  container.appendChild(section);
-
-  const nameInput = section.querySelector("#field-picker-name");
-  section.querySelectorAll('input[name="field-picker"]').forEach((radio) => {
-    radio.addEventListener("change", () => {
-      const chosen = ranked[Number(radio.value)];
-      nameInput.value = chosen.label || "";
-    });
-  });
-
-  document.getElementById("field-picker-continue").addEventListener("click", () => {
-    const selectedIndex = Number(section.querySelector('input[name="field-picker"]:checked').value);
-    const fieldName = nameInput.value.trim();
-    const errorEl = document.getElementById("field-picker-error");
-    if (!fieldName) {
-      errorEl.textContent = "Give this field a name before continuing.";
-      return;
-    }
-    runFullImport(pdf, perPageCandidates, ranked[selectedIndex].key, fieldName);
-  });
-}
-
-async function runFullImport(pdf, perPageCandidates, chosenKey, fieldName) {
-  const statusEl = document.getElementById("page-status");
-  statusEl.innerHTML = "";
-  document.getElementById("import-review").innerHTML = "";
-
-  const candidatesByPage = new Map(perPageCandidates.map((p) => [p.pageNum, p.candidates]));
-  const groups = {}; // key (slug, or "__unrecognized__") -> {slug, label, students: [{name, blob}]}
-  const missing = []; // {page} — photo detected but name couldn't be read
+// Scans every page: detects photo/name pairs as usual, but also surfaces any
+// name-text blob that never got claimed by a photo pairing (a grid cell
+// where photo-detection failed but the name is still legible) as a student
+// with no photo — pairPhotosWithNames only walks the photos array, so an
+// unclaimed text would otherwise be silently dropped instead of becoming a
+// (photo-less) student record.
+async function extractAllStudents(pdf, statusEl) {
+  const students = []; // {name, blob: Blob|null}
+  const unreadableNamePhotos = []; // {page} — photo found, name unreadable
+  const noPhotoNames = []; // {name} — name found, no photo blob paired
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const row = document.createElement("div");
@@ -591,151 +383,279 @@ async function runFullImport(pdf, perPageCandidates, chosenKey, fieldName) {
     try {
       const page = await pdf.getPage(pageNum);
       const canvas = await renderPageToCanvas(page);
-
-      let slug = null, displayLabel = "Unrecognized";
-      if (chosenKey) {
-        const match = (candidatesByPage.get(pageNum) || []).find((c) => c.key === chosenKey);
-        if (match) {
-          slug = toSlug(fieldName, match.value);
-          displayLabel = toDisplayLabel(fieldName, match.value);
-        }
-      }
-      const key = slug || "__unrecognized__";
-
       const blobs = detectBlobs(canvas);
       const { photos, texts } = classifyBlobs(blobs, canvas.width);
       const pairs = pairPhotosWithNames(photos, texts)
         .sort((a, b) => (a.photo.y0 - b.photo.y0) || (a.photo.x0 - b.photo.x0));
 
-      if (photos.length === 0) {
-        row.innerHTML = `⚠️ Page ${pageNum}: no photos detected — skipped`;
-        continue;
-      }
+      // Header text (title, class/room/pattern fields, teacher name+date —
+      // this report style only prints that block once, on page 1) never
+      // pairs with a photo and would otherwise be mistaken for orphan
+      // "no-photo" students below. Exclude the top band on page 1 only;
+      // continuation pages have no header at all.
+      const headerBandBottomPx = pageNum === 1 ? canvas.height * 0.22 : 0;
+      const usedTexts = new Set(pairs.filter((p) => p.name).map((p) => p.name));
+      const orphanTexts = texts.filter((t) => !usedTexts.has(t) && t.y0 >= headerBandBottomPx);
 
       const photoBlobs = await Promise.all(pairs.map((p) => cropPixelRect(canvas, p.photo)));
-      const nameCrops = await Promise.all(
-        pairs.map((p) => (p.name ? cropPixelRect(canvas, p.name).then((blob) => ({ blob, mediaType: "image/jpeg" })) : null))
+      const pairNameRegions = pairs.map((p) => p.name);
+      const allNameRegions = [...pairNameRegions, ...orphanTexts];
+      const crops = await Promise.all(
+        allNameRegions.map((t) => (t ? cropPixelRect(canvas, t).then((blob) => ({ blob, mediaType: "image/jpeg" })) : null))
       );
-
-      const names = new Array(pairs.length).fill("");
-      const toOcr = nameCrops.filter(Boolean);
+      const toOcr = crops.filter(Boolean);
+      const names = new Array(allNameRegions.length).fill("");
       if (toOcr.length) {
         const results = await ocrBatch(
           toOcr,
-          "Each image contains exactly one student's name printed below a photo on a school class roster, in 'Last, First' format. Read and return the exact printed text of each image, in order."
+          "Each image contains exactly one student's name printed on a school roster, in 'Last, First' format. Read and return the exact printed text of each image, in order."
         );
         let oi = 0;
-        for (let i = 0; i < nameCrops.length; i++) {
-          if (nameCrops[i]) { names[i] = (results[oi] || "").trim(); oi++; }
+        for (let i = 0; i < allNameRegions.length; i++) {
+          if (allNameRegions[i]) names[i] = (results[oi++] || "").trim();
         }
       }
 
-      groups[key] = groups[key] || { slug, label: displayLabel, students: [] };
-      let found = 0;
+      let withPhoto = 0;
       for (let i = 0; i < pairs.length; i++) {
-        if (names[i]) {
-          groups[key].students.push({ name: names[i], blob: photoBlobs[i] });
-          found++;
-        } else {
-          missing.push({ page: pageNum });
+        if (names[i]) { students.push({ name: names[i], blob: photoBlobs[i] }); withPhoto++; }
+        else unreadableNamePhotos.push({ page: pageNum });
+      }
+      // Safety net beyond the header-band exclusion above: only accept an
+      // orphan-text OCR result that actually looks like "Last, First" —
+      // discards stray non-name artifacts (page-footer URLs, print
+      // timestamps) that might otherwise slip through as fake students.
+      const NAME_SHAPE_RE = /^[^,]+,\s*\S+/;
+      let withoutPhoto = 0;
+      for (let i = 0; i < orphanTexts.length; i++) {
+        const name = names[pairs.length + i];
+        if (name && NAME_SHAPE_RE.test(name)) {
+          students.push({ name, blob: null });
+          noPhotoNames.push({ name });
+          withoutPhoto++;
         }
       }
-      row.innerHTML = slug
-        ? `✅ Page ${pageNum}: ${displayLabel} — ${found} of ${pairs.length} student(s) matched`
-        : `⚠️ Page ${pageNum}: no value found for the chosen field — ${found} of ${pairs.length} student(s) matched, added to "Unrecognized"`;
+      row.innerHTML = `✅ Page ${pageNum}: ${withPhoto} student(s) with photos` +
+        (withoutPhoto ? `, ${withoutPhoto} with no photo` : "");
     } catch (err) {
       row.innerHTML = `❌ Page ${pageNum}: ${err.message}`;
     }
   }
-
-  await renderImportReview(groups, missing);
+  return { students, unreadableNamePhotos, noPhotoNames };
 }
 
-async function renderImportReview(groups, missing) {
+function findDuplicateGroups(students) {
+  const byKey = new Map();
+  students.forEach((s, i) => {
+    const key = normalizeNameKey(s.name);
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(i);
+  });
+  return [...byKey.values()].filter((idxs) => idxs.length > 1);
+}
+
+// Shows a resolver for every duplicate name found in this import batch —
+// same person (pick which photo to keep) or different people (a required,
+// mutually-distinct nickname/initial per person) — and resolves to the
+// final, de-duplicated/disambiguated student list once every group has been
+// decided. This only ever needs to check the freshly-extracted batch against
+// itself, since a wholesale replace has nothing pre-existing to compare to.
+async function resolveDuplicates(groups, students) {
+  if (groups.length === 0) return students;
+  return new Promise((resolve) => {
+    const container = document.getElementById("duplicate-resolver");
+    container.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "card";
+    header.innerHTML = `<h3>Resolve ${groups.length} duplicate name${groups.length === 1 ? "" : "s"}</h3>
+      <p class="warn">The same name was found more than once in this PDF. For each, say whether it's the same person or two different people.</p>`;
+    container.appendChild(header);
+
+    const state = groups.map(() => ({ mode: null, keepIndex: null, disambigs: {} }));
+    const continueBtn = document.createElement("button");
+    continueBtn.textContent = "Continue Import";
+    continueBtn.disabled = true;
+    continueBtn.style.marginTop = "10px";
+
+    function checkReady() {
+      continueBtn.disabled = !state.every((s, gi) => {
+        if (s.mode === "same") return s.keepIndex != null;
+        if (s.mode === "distinct") {
+          const vals = groups[gi].map((idx) => (s.disambigs[idx] || "").trim());
+          if (vals.some((v) => !v)) return false;
+          return new Set(vals).size === vals.length;
+        }
+        return false;
+      });
+    }
+
+    groups.forEach((idxs, gi) => {
+      const groupCard = document.createElement("div");
+      groupCard.className = "card duplicate-group";
+      const thumbs = idxs.map((idx) => {
+        const s = students[idx];
+        const url = s.blob ? URL.createObjectURL(s.blob) : PLACEHOLDER_SILHOUETTE_SVG;
+        return `
+          <div class="duplicate-candidate" data-idx="${idx}">
+            <img src="${url}" alt="${s.name}">
+            <div class="name">${s.name}</div>
+            <label class="hidden"><input type="radio" name="keep-${gi}" class="keep-radio" value="${idx}"> Keep this photo</label>
+            <input type="text" class="disambig-input hidden" placeholder='Nickname or initial (e.g. J.R.)'>
+          </div>
+        `;
+      }).join("");
+      groupCard.innerHTML = `
+        <h4>${students[idxs[0]].name} — found ${idxs.length} times</h4>
+        <div class="mode-choice">
+          <label><input type="radio" name="mode-${gi}" value="same"> Same person (pick which photo to keep)</label>
+          <label><input type="radio" name="mode-${gi}" value="distinct"> Different people (name each one so they can be told apart)</label>
+        </div>
+        <div class="duplicate-candidates">${thumbs}</div>
+      `;
+      container.appendChild(groupCard);
+
+      const candidateEls = [...groupCard.querySelectorAll(".duplicate-candidate")];
+      groupCard.querySelectorAll(`input[name="mode-${gi}"]`).forEach((r) => {
+        r.addEventListener("change", () => {
+          state[gi].mode = r.value;
+          candidateEls.forEach((el) => {
+            el.querySelector(".keep-radio").closest("label").classList.toggle("hidden", r.value !== "same");
+            el.querySelector(".disambig-input").classList.toggle("hidden", r.value !== "distinct");
+          });
+          checkReady();
+        });
+      });
+      candidateEls.forEach((el) => {
+        const idx = Number(el.dataset.idx);
+        el.querySelector(".keep-radio").addEventListener("change", (e) => {
+          if (e.target.checked) state[gi].keepIndex = idx;
+          checkReady();
+        });
+        el.querySelector(".disambig-input").addEventListener("input", (e) => {
+          state[gi].disambigs[idx] = e.target.value;
+          checkReady();
+        });
+      });
+    });
+
+    container.appendChild(continueBtn);
+    continueBtn.addEventListener("click", () => {
+      const toRemove = new Set();
+      groups.forEach((idxs, gi) => {
+        const s = state[gi];
+        if (s.mode === "same") {
+          idxs.forEach((idx) => { if (idx !== s.keepIndex) toRemove.add(idx); });
+        } else {
+          idxs.forEach((idx) => { students[idx].disambiguator = (s.disambigs[idx] || "").trim(); });
+        }
+      });
+      container.innerHTML = "";
+      resolve(students.filter((_, idx) => !toRemove.has(idx)));
+    });
+  });
+}
+
+function renderReviewGrid(students, unreadableNamePhotos, noPhotoNames) {
   const container = document.getElementById("import-review");
   container.innerHTML = "";
 
-  const collections = await loadCollections(true);
+  const section = document.createElement("div");
+  section.className = "card";
+  section.innerHTML = `
+    <h3>Review ${students.length} student(s)</h3>
+    <p class="warn">Check the photos below. If one is broken or wrong (e.g. a missing-image icon instead of a real headshot), click "No real photo" so that student is saved without one instead.</p>
+    <div class="roster-list" id="review-grid"></div>
+    <button id="confirm-import-btn" style="margin-top:14px;">Save &amp; Replace Entire Database</button>
+    <span class="save-status" id="import-save-status" style="margin-left:10px;"></span>
+  `;
+  container.appendChild(section);
 
-  for (const group of Object.values(groups)) {
-    const section = document.createElement("div");
-    section.className = "import-group card";
-
-    const exactMatch = group.slug ? collections.find((c) => c.slug === group.slug) : null;
-    const isUnrecognized = !group.slug;
-
-    const optionsHtml =
-      `<option value="${NEW_COLLECTION_VALUE}">+ Create new collection</option>` +
-      collections.map((c) =>
-        `<option value="${c.id}" ${exactMatch && exactMatch.id === c.id ? "selected" : ""}>${c.label}</option>`
-      ).join("");
-
-    const thumbs = group.students.map((s) => {
-      const url = URL.createObjectURL(s.blob);
-      return `<div class="roster-item"><img src="${url}" alt="${s.name}"><div class="name">${s.name}</div></div>`;
-    }).join("");
-
-    section.innerHTML = `
-      <div class="import-group-header">
-        <input type="text" class="import-group-label" placeholder="Name this collection"
-          value="${isUnrecognized ? "" : group.label}" ${exactMatch ? "disabled" : ""}>
-        <select class="import-group-select">${optionsHtml}</select>
-      </div>
-      <p class="warn">${isUnrecognized
-        ? `${group.students.length} student(s) found but no grouping label could be detected for their page(s). Pick an existing collection above, or name a new one, before saving.`
-        : `Saving will replace the entire "${group.label}" collection with these ${group.students.length} students. Check the crops below before saving.`
-      }</p>
-      <div class="roster-list">${thumbs}</div>
-      <button class="save-group-btn" style="margin-top:14px;">Save &amp; Replace</button>
-      <span class="save-status" style="margin-left:10px;"></span>
+  const grid = section.querySelector("#review-grid");
+  students.forEach((s) => {
+    const item = document.createElement("div");
+    item.className = "roster-item";
+    const url = s.blob ? URL.createObjectURL(s.blob) : PLACEHOLDER_SILHOUETTE_SVG;
+    item.innerHTML = `
+      <img src="${url}" alt="${s.name}">
+      <div class="name">${s.name}</div>
+      <button type="button" class="secondary remove-photo-btn" ${s.blob ? "" : "disabled"}>${s.blob ? "No real photo" : "No photo"}</button>
     `;
-
-    const labelInput = section.querySelector(".import-group-label");
-    const select = section.querySelector(".import-group-select");
-    const saveBtn = section.querySelector(".save-group-btn");
-    if (!exactMatch) select.value = NEW_COLLECTION_VALUE;
-
-    function syncEnabled() {
-      const usingNew = select.value === NEW_COLLECTION_VALUE;
-      labelInput.disabled = !usingNew;
-      saveBtn.disabled = usingNew && !labelInput.value.trim();
+    if (s.blob) {
+      item.querySelector(".remove-photo-btn").addEventListener("click", () => {
+        s.blob = null;
+        item.querySelector("img").src = PLACEHOLDER_SILHOUETTE_SVG;
+        const btn = item.querySelector(".remove-photo-btn");
+        btn.disabled = true;
+        btn.textContent = "No photo";
+      });
     }
-    select.addEventListener("change", syncEnabled);
-    labelInput.addEventListener("input", syncEnabled);
-    syncEnabled();
+    grid.appendChild(item);
+  });
 
-    saveBtn.addEventListener("click", async () => {
-      saveBtn.disabled = true;
-      const statusSpan = section.querySelector(".save-status");
-      statusSpan.textContent = "Saving…";
-      const form = new FormData();
-      if (select.value === NEW_COLLECTION_VALUE) {
-        form.append("newCollectionLabel", labelInput.value.trim());
-      } else {
-        form.append("collectionId", select.value);
-      }
-      for (const s of group.students) {
-        form.append("name", s.name);
-        form.append("photo", s.blob, "photo.jpg");
-      }
-      const res = await apiFetch("/api/import/replace-collection", { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) {
-        statusSpan.textContent = data.error || "Failed to save";
-        saveBtn.disabled = false;
-        return;
-      }
-      statusSpan.textContent = `Saved ${data.count} students.`;
-      await loadCollections(true);
-    });
-
-    container.appendChild(section);
+  if (unreadableNamePhotos.length || noPhotoNames.length) {
+    const summary = document.createElement("div");
+    summary.className = "card";
+    let html = "<h3>Heads up</h3>";
+    if (unreadableNamePhotos.length) {
+      const pages = [...new Set(unreadableNamePhotos.map((m) => m.page))].join(", ");
+      html += `<p class="warn">${unreadableNamePhotos.length} photo(s) across page(s) ${pages} couldn't be paired with a readable name and were not imported. Add those students manually from the "Add Student" tab.</p>`;
+    }
+    if (noPhotoNames.length) {
+      html += `<p class="warn">${noPhotoNames.length} student(s) were saved with no photo on file — worth adding real photos for them eventually: ${noPhotoNames.map((n) => n.name).join(", ")}.</p>`;
+    }
+    summary.innerHTML = html;
+    container.appendChild(summary);
   }
 
-  if (missing.length) {
-    const div = document.createElement("div");
-    div.className = "card";
-    div.innerHTML = `<h3>Photos found without a readable name</h3><p class="warn">${missing.length} photo(s) across page(s) ${[...new Set(missing.map((m) => m.page))].join(", ")} couldn't be paired with a name automatically. Add those students manually from the "Add Student" tab.</p>`;
-    container.appendChild(div);
-  }
+  section.querySelector("#confirm-import-btn").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    await saveImport(students, section.querySelector("#import-save-status"));
+  });
 }
+
+// Splits the save into chunks: a single Worker invocation is capped at 1000
+// subrequests (R2 uploads count against that), and chunking also gives real
+// progress feedback across ~1000+ students — a far bigger job than any
+// per-class import. "replace" wipes the whole database on the first chunk
+// only; every later chunk of the same import uses "append" so it doesn't
+// wipe what the previous chunk just saved.
+async function saveImport(students, statusEl) {
+  const CHUNK_SIZE = 150;
+  const chunks = [];
+  for (let i = 0; i < students.length; i += CHUNK_SIZE) chunks.push(students.slice(i, i + CHUNK_SIZE));
+  for (let c = 0; c < chunks.length; c++) {
+    statusEl.textContent = `Saving ${c + 1} of ${chunks.length}…`;
+    const form = new FormData();
+    form.append("mode", c === 0 ? "replace" : "append");
+    for (const s of chunks[c]) {
+      form.append("name", s.name);
+      form.append("disambiguator", s.disambiguator || "");
+      if (s.blob) form.append("photo", await cropToSquare(s.blob), "photo.jpg");
+      else form.append("photo", "");
+    }
+    const res = await apiFetch("/api/master/import", { method: "POST", body: form });
+    if (!res.ok) {
+      statusEl.textContent = (await res.json().catch(() => ({}))).error || "Import failed";
+      return;
+    }
+  }
+  statusEl.textContent = `Saved ${students.length} students.`;
+}
+
+document.getElementById("pdf-input").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  document.getElementById("duplicate-resolver").innerHTML = "";
+  document.getElementById("import-review").innerHTML = "";
+  const statusEl = document.getElementById("page-status");
+  statusEl.innerHTML = "";
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  const { students, unreadableNamePhotos, noPhotoNames } = await extractAllStudents(pdf, statusEl);
+  const groups = findDuplicateGroups(students);
+  const resolvedStudents = await resolveDuplicates(groups, students);
+  renderReviewGrid(resolvedStudents, unreadableNamePhotos, noPhotoNames);
+});

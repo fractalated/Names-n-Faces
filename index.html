@@ -30,10 +30,10 @@
   <div class="topbar">
     <div>
       <h1>Names &amp; Faces</h1>
-      <p class="subtitle">Pick a collection to study, or manage your roster.</p>
+      <p class="subtitle">Pick a deck to study, or build a new one.</p>
     </div>
     <div>
-      <a href="admin.html">Manage Roster</a>
+      <a href="admin.html" id="master-db-link" class="hidden">Master Database</a>
       &nbsp;&middot;&nbsp;
       <a href="users.html" id="manage-users-link" class="hidden">Manage Users</a>
       &nbsp;&middot;&nbsp;
@@ -41,10 +41,7 @@
     </div>
   </div>
 
-  <div class="grid" id="collection-grid"></div>
-  <div id="empty-collections" class="card hidden">
-    No collections yet. Go to <a href="admin.html">Manage Roster</a> to import a class roster PDF or add students one at a time.
-  </div>
+  <div class="grid" id="deck-grid"></div>
 </div>
 
 <script src="app.js"></script>
@@ -86,19 +83,13 @@ async function render() {
 
   const me = await loadMe();
   document.getElementById("manage-users-link").classList.toggle("hidden", !me.isAdmin);
+  document.getElementById("master-db-link").classList.toggle("hidden", !me.isAdmin);
 
-  const collections = await loadCollections();
-  const grid = document.getElementById("collection-grid");
-  const emptyMsg = document.getElementById("empty-collections");
-  if (collections.length === 0) {
-    grid.innerHTML = "";
-    emptyMsg.classList.remove("hidden");
-    return;
-  }
-  emptyMsg.classList.add("hidden");
+  const decks = await loadDecks();
+  const grid = document.getElementById("deck-grid");
   grid.innerHTML =
-    `<a class="collection-tile all" href="collection.html?c=all">All Collections</a>` +
-    collections.map((c) => `<a class="collection-tile" href="collection.html?c=${c.slug}">${c.label}</a>`).join("");
+    decks.map((d) => `<a class="collection-tile" href="deck.html?d=${d.id}">${d.label}<small>${d.entryCount} student${d.entryCount === 1 ? "" : "s"}</small></a>`).join("") +
+    `<a class="collection-tile all" href="deck-builder.html">+ Create New Deck</a>`;
 }
 
 document.getElementById("auth-form").addEventListener("submit", async (e) => {

@@ -2,8 +2,9 @@
 -- (applied with `wrangler d1 migrations apply`) — do not run this file against a
 -- live/production database, since the DROP TABLE statements below discard data.
 
-DROP TABLE IF EXISTS people;
-DROP TABLE IF EXISTS collections;
+DROP TABLE IF EXISTS deck_entries;
+DROP TABLE IF EXISTS decks;
+DROP TABLE IF EXISTS master_students;
 DROP TABLE IF EXISTS users;
 
 CREATE TABLE users (
@@ -14,26 +15,31 @@ CREATE TABLE users (
   created_at    INTEGER NOT NULL
 );
 
-CREATE TABLE collections (
+CREATE TABLE master_students (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  name_key      TEXT NOT NULL,
+  disambiguator TEXT,
+  photo_key     TEXT,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX idx_master_students_name_key ON master_students(name_key);
+
+CREATE TABLE decks (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL,
-  slug       TEXT NOT NULL,
   label      TEXT NOT NULL,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  UNIQUE(user_id, slug)
-);
-CREATE INDEX idx_collections_user ON collections(user_id);
-
-CREATE TABLE people (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  photo_key TEXT NOT NULL,
-  collection TEXT NOT NULL,
-  user_id TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE INDEX idx_decks_user ON decks(user_id);
 
-CREATE INDEX idx_people_collection ON people(collection);
-CREATE INDEX idx_people_user ON people(user_id);
-CREATE INDEX idx_people_user_collection ON people(user_id, collection);
+CREATE TABLE deck_entries (
+  id                TEXT PRIMARY KEY,
+  deck_id           TEXT NOT NULL,
+  raw_name_text     TEXT NOT NULL,
+  master_student_id TEXT,
+  created_at        INTEGER NOT NULL
+);
+CREATE INDEX idx_deck_entries_deck ON deck_entries(deck_id);
+CREATE INDEX idx_deck_entries_master_student ON deck_entries(master_student_id);

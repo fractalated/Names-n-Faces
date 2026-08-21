@@ -1,7 +1,7 @@
 const API_BASE = "https://names-n-faces-api.fractalated.workers.dev";
 const TOKEN_KEY = "nnf_token";
 
-let cachedCollections = null;
+let cachedDecks = null;
 let cachedUser = null;
 
 function getToken() {
@@ -9,12 +9,12 @@ function getToken() {
 }
 function setToken(token) {
   localStorage.setItem(TOKEN_KEY, token);
-  cachedCollections = null;
+  cachedDecks = null;
   cachedUser = null;
 }
 function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
-  cachedCollections = null;
+  cachedDecks = null;
   cachedUser = null;
 }
 function requireLogin() {
@@ -47,14 +47,13 @@ async function fetchPhotoObjectUrl(photoUrl) {
   return URL.createObjectURL(blob);
 }
 
-// Fetches (and caches in memory) the logged-in user's own collections. Every
-// user has their own independent set — there is no global fixed list anymore.
-async function loadCollections(force = false) {
-  if (cachedCollections && !force) return cachedCollections;
-  const res = await apiFetch("/api/collections");
+// Fetches (and caches in memory) the logged-in user's own decks.
+async function loadDecks(force = false) {
+  if (cachedDecks && !force) return cachedDecks;
+  const res = await apiFetch("/api/decks");
   const data = await res.json();
-  cachedCollections = data.collections;
-  return cachedCollections;
+  cachedDecks = data.decks;
+  return cachedDecks;
 }
 
 // Fetches (and caches in memory) the logged-in user's identity/role. This is
@@ -67,9 +66,29 @@ async function loadMe(force = false) {
   return cachedUser;
 }
 
-function collectionLabel(slug, collections) {
-  if (slug === "all") return "All Collections";
-  const list = collections || cachedCollections || [];
-  const match = list.find((c) => c.slug === slug);
-  return match ? match.label : slug;
+// Generic grey silhouette shown whenever a card has no photo — either the
+// matched master student never had one, or the match itself is missing
+// (never matched, or the master record was since removed/replaced). Inline
+// SVG so there's no extra request and it themes with the existing palette.
+const PLACEHOLDER_SILHOUETTE_SVG =
+  "data:image/svg+xml;utf8," + encodeURIComponent(
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" +
+    "<rect width='100' height='100' fill='#e1e4ea'/>" +
+    "<circle cx='50' cy='38' r='18' fill='#98a2b3'/>" +
+    "<path d='M14 92 C14 66 30 56 50 56 C70 56 86 66 86 92 Z' fill='#98a2b3'/>" +
+    "</svg>"
+  );
+
+// Sets imgEl.src from a card's photo, falling back to the placeholder
+// silhouette when the card has no photo, or if fetching it fails.
+async function loadCardImage(imgEl, card) {
+  if (!card.hasPhoto || !card.photoUrl) {
+    imgEl.src = PLACEHOLDER_SILHOUETTE_SVG;
+    return;
+  }
+  try {
+    imgEl.src = await fetchPhotoObjectUrl(card.photoUrl);
+  } catch {
+    imgEl.src = PLACEHOLDER_SILHOUETTE_SVG;
+  }
 }

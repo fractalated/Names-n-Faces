@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Create New Deck — Names & Faces</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+  <div class="topbar">
+    <div>
+      <h1>Create New Deck</h1>
+      <p class="subtitle">Upload a list of names — a printed roster, attendance sheet, or anything similar — and name your deck. Photos come from the shared student database.</p>
+    </div>
+    <div><a href="index.html">&larr; Home</a></div>
+  </div>
+
+  <div class="card">
+    <label>Deck Name</label>
+    <input type="text" id="deck-label" placeholder="e.g. Period 3, Seniors, Chemistry Students">
+    <div style="height:10px;"></div>
+    <label>Name List (PDF)</label>
+    <input type="file" id="list-input" accept="application/pdf">
+    <div class="error-msg" id="build-error"></div>
+    <div id="build-status" style="margin-top:14px;"></div>
+  </div>
+
+  <div id="match-review"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="app.js"></script>
+<script src="deck-builder.js"></script>
+</body>
+</html>
