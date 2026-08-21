@@ -625,15 +625,22 @@ async function saveImport(students, statusEl) {
   const chunks = [];
   for (let i = 0; i < students.length; i += CHUNK_SIZE) chunks.push(students.slice(i, i + CHUNK_SIZE));
   for (let c = 0; c < chunks.length; c++) {
+    statusEl.textContent = `Preparing photos for chunk ${c + 1} of ${chunks.length}…`;
+    // Crop every photo in this chunk concurrently rather than one at a time
+    // — sequential createImageBitmap/canvas/toBlob round trips are slow
+    // enough (~1s+ each) that awaiting them one by one made a ~1000-student
+    // import take tens of minutes before the first byte was even uploaded.
+    const croppedPhotos = await Promise.all(
+      chunks[c].map((s) => (s.blob ? cropToSquare(s.blob) : Promise.resolve(null)))
+    );
     statusEl.textContent = `Saving ${c + 1} of ${chunks.length}…`;
     const form = new FormData();
     form.append("mode", c === 0 ? "replace" : "append");
-    for (const s of chunks[c]) {
+    chunks[c].forEach((s, i) => {
       form.append("name", s.name);
       form.append("disambiguator", s.disambiguator || "");
-      if (s.blob) form.append("photo", await cropToSquare(s.blob), "photo.jpg");
-      else form.append("photo", "");
-    }
+      form.append("photo", croppedPhotos[i] || "", croppedPhotos[i] ? "photo.jpg" : "");
+    });
     const res = await apiFetch("/api/master/import", { method: "POST", body: form });
     if (!res.ok) {
       statusEl.textContent = (await res.json().catch(() => ({}))).error || "Import failed";
