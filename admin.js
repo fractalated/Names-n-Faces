@@ -154,7 +154,7 @@ function renderManageList() {
         <button type="button" class="secondary photo-btn">${s.hasPhoto ? "Replace Photo" : "Add Photo"}</button>
         ${s.hasPhoto ? '<button type="button" class="secondary remove-photo-btn">Remove Photo</button>' : ""}
       </div>
-      <div style="display:flex; gap:6px; justify-content:center; margin-top:6px;">
+      <div style="display:flex; gap:6px; justify-content:center; margin-top:6px; flex-wrap:wrap;">
         <button type="button" class="secondary edit-btn">Edit Name</button>
         <button type="button" class="danger delete-btn">Delete</button>
       </div>
