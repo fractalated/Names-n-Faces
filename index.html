@@ -102,6 +102,7 @@ async function render() {
       <div class="deck-tile" data-deck-id="${d.id}">
         <a class="deck-tile-link" href="deck.html?d=${d.id}">${d.label}<small>${d.entryCount} student${d.entryCount === 1 ? "" : "s"}</small></a>
         <div class="deck-tile-actions">
+          <a href="deck-view.html?d=${d.id}" class="secondary btn">View All</a>
           <a href="deck-edit.html?d=${d.id}" class="secondary btn">Edit</a>
           <button class="danger delete-deck-btn">Delete</button>
         </div>

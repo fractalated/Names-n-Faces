@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Names & Faces</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+  <div class="topbar">
+    <div class="topbar-title">
+      <picture>
+        <source srcset="assets/logo-white.png" media="(prefers-color-scheme: dark)">
+        <img src="assets/logo-purple.png" alt="Lutheran High School" class="brand-mark">
+      </picture>
+      <div>
+        <h1 id="title">Loading…</h1>
+        <p class="subtitle" id="subtitle"></p>
+      </div>
+    </div>
+    <div>
+      <a href="#" id="quiz-link">Quiz This Deck</a>
+      &nbsp;&middot;&nbsp;
+      <a href="index.html">&larr; Home</a>
+    </div>
+  </div>
+
+  <div id="empty-msg" class="card hidden">No students in this deck yet.</div>
+
+  <div class="roster-list" id="study-grid"></div>
+</div>
+
+<script src="app.js"></script>
+<script>
+requireLogin();
+
+const params = new URLSearchParams(location.search);
+const deckId = params.get("d");
+
+async function init() {
+  if (!deckId) {
+    document.getElementById("title").textContent = "Deck not found";
+    return;
+  }
+  document.getElementById("quiz-link").href = `deck.html?d=${encodeURIComponent(deckId)}`;
+
+  const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}/cards`);
+  if (!res.ok) {
+    document.getElementById("title").textContent = "Deck not found";
+    return;
+  }
+  const data = await res.json();
+  document.getElementById("title").textContent = data.label;
+  document.getElementById("subtitle").textContent = `${data.cards.length} student${data.cards.length === 1 ? "" : "s"}`;
+
+  if (data.cards.length === 0) {
+    document.getElementById("empty-msg").classList.remove("hidden");
+    return;
+  }
+
+  const grid = document.getElementById("study-grid");
+  for (const card of data.cards) {
+    const item = document.createElement("div");
+    item.className = "roster-item";
+    const displayName = card.disambiguator ? `${card.name} (${card.disambiguator})` : card.name;
+    item.innerHTML = `<img alt="${displayName}"><div class="name">${displayName}</div>`;
+    loadCardImage(item.querySelector("img"), card);
+    grid.appendChild(item);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
