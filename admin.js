@@ -388,12 +388,19 @@ async function extractAllStudents(pdf, statusEl) {
       const pairs = pairPhotosWithNames(photos, texts)
         .sort((a, b) => (a.photo.y0 - b.photo.y0) || (a.photo.x0 - b.photo.x0));
 
-      // Header text (title, class/room/pattern fields, teacher name+date —
-      // this report style only prints that block once, on page 1) never
-      // pairs with a photo and would otherwise be mistaken for orphan
-      // "no-photo" students below. Exclude the top band on page 1 only;
-      // continuation pages have no header at all.
-      const headerBandBottomPx = pageNum === 1 ? canvas.height * 0.22 : 0;
+      // Header/margin text never pairs with a photo and would otherwise be
+      // mistaken for orphan "no-photo" students below. Two bands, confirmed
+      // against the real production PDF: page 1 has a substantial header
+      // block (title, class/room/pattern fields, teacher name+date) running
+      // to roughly the top 22%; the browser's print margin (a small
+      // date/time + "Untitled Document" line) turned out to repeat on
+      // EVERY page, not just page 1 as first assumed from a visual check —
+      // it showed up as a fake "student" duplicated 28 times across the
+      // real 29-page import before this fix. This only affects orphan
+      // (unpaired) text — real photo+name pairs are never filtered by
+      // position — so a generous margin band on continuation pages carries
+      // no risk of losing an actual student's row.
+      const headerBandBottomPx = canvas.height * (pageNum === 1 ? 0.22 : 0.08);
       const usedTexts = new Set(pairs.filter((p) => p.name).map((p) => p.name));
       const orphanTexts = texts.filter((t) => !usedTexts.has(t) && t.y0 >= headerBandBottomPx);
 
@@ -425,11 +432,16 @@ async function extractAllStudents(pdf, statusEl) {
       // orphan-text OCR result that actually looks like "Last, First" —
       // discards stray non-name artifacts (page-footer URLs, print
       // timestamps) that might otherwise slip through as fake students.
+      // The date/time check exists because a real production run showed a
+      // print-margin timestamp like "8/21/26, 9:07 AM" otherwise satisfies
+      // the plain comma-shape check (a date and a time, joined by a comma,
+      // looks exactly like "Last, First" to a naive regex).
       const NAME_SHAPE_RE = /^[^,]+,\s*\S+/;
+      const LOOKS_LIKE_DATE_RE = /^\d{1,2}\/\d{1,2}\/\d{2,4}\s*,/;
       let withoutPhoto = 0;
       for (let i = 0; i < orphanTexts.length; i++) {
         const name = names[pairs.length + i];
-        if (name && NAME_SHAPE_RE.test(name)) {
+        if (name && NAME_SHAPE_RE.test(name) && !LOOKS_LIKE_DATE_RE.test(name)) {
           students.push({ name, blob: null });
           noPhotoNames.push({ name });
           withoutPhoto++;
