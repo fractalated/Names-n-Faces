@@ -4,6 +4,7 @@ const params = new URLSearchParams(location.search);
 const deckId = params.get("d");
 
 let currentCards = [];
+let currentLabel = "";
 let masterStudents = null; // fetched once, lazily, on first search
 const selected = new Set();
 
@@ -61,10 +62,32 @@ async function loadDeck() {
     return;
   }
   const data = await res.json();
+  currentLabel = data.label;
   document.getElementById("title").textContent = `Edit "${data.label}"`;
+  document.getElementById("rename-input").value = data.label;
   currentCards = data.cards;
   renderCurrentList();
 }
+
+document.getElementById("rename-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById("rename-error");
+  errorEl.textContent = "";
+  const newLabel = document.getElementById("rename-input").value.trim();
+  if (!newLabel || newLabel === currentLabel) return;
+  const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label: newLabel }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errorEl.textContent = data.error || "Could not rename deck";
+    return;
+  }
+  currentLabel = newLabel;
+  document.getElementById("title").textContent = `Edit "${newLabel}"`;
+});
 
 function renderCurrentList() {
   const list = document.getElementById("current-list");

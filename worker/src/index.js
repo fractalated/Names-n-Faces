@@ -514,6 +514,16 @@ export default {
     }
 
     const deckMatch = pathname.match(/^\/api\/decks\/([\w-]+)$/);
+    if (deckMatch && request.method === "PATCH") {
+      const { label } = await request.json().catch(() => ({}));
+      const trimmedLabel = (label || "").toString().trim();
+      if (!trimmedLabel) return json({ error: "A deck name is required" }, 400, env);
+      const result = await env.DB.prepare(
+        "UPDATE decks SET label = ? WHERE id = ? AND user_id = ?"
+      ).bind(trimmedLabel, deckMatch[1], auth.userId).run();
+      if (result.meta.changes === 0) return json({ error: "Not found" }, 404, env);
+      return json({ ok: true, label: trimmedLabel }, 200, env);
+    }
     if (deckMatch && request.method === "DELETE") {
       const row = await env.DB.prepare(
         "SELECT id FROM decks WHERE id = ? AND user_id = ?"

@@ -17,6 +17,15 @@
   </div>
 
   <div class="card">
+    <h2 style="margin-top:0;">Deck Name</h2>
+    <form id="rename-form" style="display:flex; gap:10px; align-items:flex-start;">
+      <input type="text" id="rename-input" required>
+      <button type="submit" style="flex-shrink:0;">Save Name</button>
+    </form>
+    <div class="error-msg" id="rename-error"></div>
+  </div>
+
+  <div class="card">
     <h2 style="margin-top:0;">Add a Student</h2>
     <form id="add-search-form">
       <input type="text" id="add-name-input" placeholder="Type a student's name…" required>
