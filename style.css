@@ -244,7 +244,7 @@ input[type="text"], input[type="password"], input[type="email"], select {
 .deck-tile:hover { box-shadow: 0 4px 16px rgba(88,45,131,0.14); }
 .deck-tile-link { text-decoration: none; color: var(--text); font-family: var(--serif); font-style: italic; font-weight: 700; text-align: center; }
 .deck-tile-link small { display: block; font-family: var(--sans); font-weight: 400; font-style: normal; color: var(--muted); margin-top: 4px; font-size: 0.8rem; }
-.deck-tile-actions { display: flex; justify-content: center; gap: 8px; font-family: var(--sans); }
+.deck-tile-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; font-family: var(--sans); }
 .deck-tile-actions a, .deck-tile-actions button { font-family: var(--sans); font-style: normal; font-size: 0.8rem; padding: 6px 10px; }
 
 .roster-item-selectable { cursor: pointer; display: block; }
