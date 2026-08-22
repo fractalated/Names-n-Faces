@@ -2,3 +2,12 @@ node_modules/
 .wrangler/
 .DS_Store
 .dev.vars
+
+# Internal brand reference docs and print-resolution source art — not meant
+# to be publicly served (GitHub Pages serves the whole repo root). Only the
+# small optimized logo-*.png files derived from these are tracked/served.
+assets/*.pdf
+assets/L_correct_wordmark.png
+assets/L-correct-wordmark.png
+assets/L_correct_white.png
+assets/L_correct_whiteback.png

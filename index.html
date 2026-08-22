@@ -8,6 +8,10 @@
 </head>
 <body>
 <div id="login-view" class="page login-box hidden">
+  <picture>
+    <source srcset="assets/logo-white.png" media="(prefers-color-scheme: dark)">
+    <img src="assets/logo-purple.png" alt="Lutheran High School" class="brand-mark">
+  </picture>
   <h1>Names &amp; Faces</h1>
   <p class="subtitle" id="auth-subtitle">Log in with your school email to continue.</p>
   <div class="card">
@@ -28,9 +32,15 @@
 
 <div id="home-view" class="page hidden">
   <div class="topbar">
-    <div>
-      <h1>Names &amp; Faces</h1>
-      <p class="subtitle">Pick a deck to study, or build a new one.</p>
+    <div class="topbar-title">
+      <picture>
+        <source srcset="assets/logo-white.png" media="(prefers-color-scheme: dark)">
+        <img src="assets/logo-purple.png" alt="Lutheran High School" class="brand-mark">
+      </picture>
+      <div>
+        <h1>Names &amp; Faces</h1>
+        <p class="subtitle">Pick a deck to study, or build a new one.</p>
+      </div>
     </div>
     <div>
       <a href="admin.html" id="master-db-link" class="hidden">Master Database</a>
