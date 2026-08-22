@@ -651,7 +651,8 @@ async function saveImport(students, statusEl) {
     chunks[c].forEach((s, i) => {
       form.append("name", s.name);
       form.append("disambiguator", s.disambiguator || "");
-      form.append("photo", croppedPhotos[i] || "", croppedPhotos[i] ? "photo.jpg" : "");
+      if (croppedPhotos[i]) form.append("photo", croppedPhotos[i], "photo.jpg");
+      else form.append("photo", "");
     });
     const res = await apiFetch("/api/master/import", { method: "POST", body: form });
     if (!res.ok) {
