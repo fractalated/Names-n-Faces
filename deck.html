@@ -13,7 +13,11 @@
       <h1 id="title">Loading…</h1>
       <p class="subtitle" id="subtitle"></p>
     </div>
-    <div><a href="index.html">&larr; Home</a></div>
+    <div>
+      <a href="#" id="edit-link" class="hidden">Edit Deck</a>
+      &nbsp;&middot;&nbsp;
+      <a href="index.html">&larr; Home</a>
+    </div>
   </div>
 
   <div id="empty-msg" class="card hidden">No students in this deck yet. Build one from <a href="deck-builder.html">Create New Deck</a>.</div>
@@ -88,6 +92,9 @@ async function init() {
   }
   const data = await res.json();
   document.getElementById("title").textContent = data.label;
+  const editLink = document.getElementById("edit-link");
+  editLink.href = `deck-edit.html?d=${encodeURIComponent(deckId)}`;
+  editLink.classList.remove("hidden");
   document.getElementById("subtitle").textContent = `${data.cards.length} student${data.cards.length === 1 ? "" : "s"}`;
   if (data.cards.length === 0) {
     document.getElementById("empty-msg").classList.remove("hidden");

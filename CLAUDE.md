@@ -221,3 +221,35 @@ D1, then drive it with `curl`. For a *fresh* local D1, apply
 rather than the migration chain — early migrations assume a pre-existing
 `people` table that only ever existed in production from before migrations
 were introduced, and won't apply cleanly to a truly empty local database.
+
+## Deck editing (delete deck, add/remove students)
+
+Every deck tile on the home screen (`index.html`) has "Edit" and "Delete"
+actions — available to whichever user owns that deck, admin or not, since
+decks are always per-user (`DELETE /api/decks/:id` is already scoped by
+`user_id`, so this needed no new auth logic, only UI). "Edit" opens
+`deck-edit.html`/`deck-edit.js`, which shows the whole deck as a checkbox
+grid ("select students, Remove Selected" — bulk client-side loop over
+`DELETE /api/decks/:id/entries/:entryId`, not a bespoke bulk-delete route)
+plus a "type a name, confirm the match" add flow.
+
+**`POST /api/decks/:id/entries`** (add one entry) and **`DELETE
+/api/decks/:id/entries/:entryId`** (remove one entry) are the two routes
+this added. Both re-verify deck ownership (`WHERE id = ? AND user_id = ?`)
+before touching anything, same pattern as every other per-user deck route.
+
+**Deliberate exception to "no fuzzy matching":** the top-level "Duplicate
+names" section of this doc says no fuzzy matching, anywhere, by design —
+that rule is about `deck-builder.js`'s bulk import, where exact `name_key`
+matching is what makes duplicate-name resolution well-defined (see that
+section). Typing one name by hand to add to an existing deck is a
+different situation: there's no batch to reason about consistently, and
+the user explicitly asked for "closest match, then I confirm." So
+`deck-edit.js` has its own `similarity()` (substring bonus, else
+normalized Levenshtein distance) purely for ranking candidates to show the
+user — it never auto-assigns a match. The user always clicks "This is
+them" (sends that student's exact id) or "Add anyway" (sends
+`masterStudentId: null`, same unmatched/placeholder-photo path bulk import
+already uses). If this exception ever needs to spread to another flow,
+extract `similarity()`/`levenshtein()` into a shared file rather than
+copy-pasting a third time.

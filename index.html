@@ -88,8 +88,28 @@ async function render() {
   const decks = await loadDecks();
   const grid = document.getElementById("deck-grid");
   grid.innerHTML =
-    decks.map((d) => `<a class="collection-tile" href="deck.html?d=${d.id}">${d.label}<small>${d.entryCount} student${d.entryCount === 1 ? "" : "s"}</small></a>`).join("") +
+    decks.map((d) => `
+      <div class="deck-tile" data-deck-id="${d.id}">
+        <a class="deck-tile-link" href="deck.html?d=${d.id}">${d.label}<small>${d.entryCount} student${d.entryCount === 1 ? "" : "s"}</small></a>
+        <div class="deck-tile-actions">
+          <a href="deck-edit.html?d=${d.id}" class="secondary btn">Edit</a>
+          <button class="danger delete-deck-btn">Delete</button>
+        </div>
+      </div>
+    `).join("") +
     `<a class="collection-tile all" href="deck-builder.html">+ Create New Deck</a>`;
+
+  grid.querySelectorAll(".delete-deck-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const tile = btn.closest(".deck-tile");
+      const deckId = tile.dataset.deckId;
+      const label = tile.querySelector(".deck-tile-link").firstChild.textContent.trim();
+      if (!confirm(`Delete the deck "${label}"? This cannot be undone.`)) return;
+      await apiFetch(`/api/decks/${deckId}`, { method: "DELETE" });
+      await loadDecks(true);
+      render();
+    });
+  });
 }
 
 document.getElementById("auth-form").addEventListener("submit", async (e) => {

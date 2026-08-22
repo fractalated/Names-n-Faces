@@ -471,6 +471,48 @@ export default {
       return json({ label: deck.label, cards }, 200, env);
     }
 
+    const deckEntriesMatch = pathname.match(/^\/api\/decks\/([\w-]+)\/entries$/);
+    if (deckEntriesMatch && request.method === "POST") {
+      const deck = await env.DB.prepare(
+        "SELECT id FROM decks WHERE id = ? AND user_id = ?"
+      ).bind(deckEntriesMatch[1], auth.userId).first();
+      if (!deck) return json({ error: "Not found" }, 404, env);
+      const { rawName, masterStudentId } = await request.json().catch(() => ({}));
+      const trimmed = (rawName || "").toString().trim();
+      if (!trimmed) return json({ error: "A name is required" }, 400, env);
+
+      const entryId = crypto.randomUUID();
+      await env.DB.prepare(
+        "INSERT INTO deck_entries (id, deck_id, raw_name_text, master_student_id, created_at) VALUES (?, ?, ?, ?, ?)"
+      ).bind(entryId, deckEntriesMatch[1], trimmed, masterStudentId || null, Date.now()).run();
+
+      let card = { id: entryId, name: trimmed, disambiguator: null, hasPhoto: false, photoUrl: null };
+      if (masterStudentId) {
+        const ms = await env.DB.prepare(
+          "SELECT name, disambiguator, photo_key IS NOT NULL AS has_photo FROM master_students WHERE id = ?"
+        ).bind(masterStudentId).first();
+        if (ms) {
+          card = {
+            id: entryId, name: ms.name, disambiguator: ms.disambiguator || null,
+            hasPhoto: !!ms.has_photo, photoUrl: ms.has_photo ? `/api/master/photo/${masterStudentId}` : null,
+          };
+        }
+      }
+      return json(card, 201, env);
+    }
+
+    const deckEntryMatch = pathname.match(/^\/api\/decks\/([\w-]+)\/entries\/([\w-]+)$/);
+    if (deckEntryMatch && request.method === "DELETE") {
+      const deck = await env.DB.prepare(
+        "SELECT id FROM decks WHERE id = ? AND user_id = ?"
+      ).bind(deckEntryMatch[1], auth.userId).first();
+      if (!deck) return json({ error: "Not found" }, 404, env);
+      await env.DB.prepare(
+        "DELETE FROM deck_entries WHERE id = ? AND deck_id = ?"
+      ).bind(deckEntryMatch[2], deckEntryMatch[1]).run();
+      return json({ ok: true }, 200, env);
+    }
+
     const deckMatch = pathname.match(/^\/api\/decks\/([\w-]+)$/);
     if (deckMatch && request.method === "DELETE") {
       const row = await env.DB.prepare(

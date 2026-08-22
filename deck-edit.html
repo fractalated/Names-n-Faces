@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edit Deck — Names & Faces</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+  <div class="topbar">
+    <div>
+      <h1 id="title">Loading…</h1>
+      <p class="subtitle">Add or remove students from this deck.</p>
+    </div>
+    <div><a href="index.html">&larr; Home</a></div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;">Add a Student</h2>
+    <form id="add-search-form">
+      <input type="text" id="add-name-input" placeholder="Type a student's name…" required>
+      <button type="submit" style="margin-top:10px;">Find Match</button>
+    </form>
+    <div id="match-results"></div>
+  </div>
+
+  <h2>Current Students</h2>
+  <div class="card" id="current-toolbar">
+    <button class="danger" id="remove-selected-btn" disabled>Remove Selected</button>
+  </div>
+  <div class="roster-list" id="current-list"></div>
+
+  <div class="card" style="margin-top:28px; border-color:var(--danger);">
+    <h2 style="margin-top:0;">Danger Zone</h2>
+    <p class="subtitle">Deletes the whole deck, not just the students in it.</p>
+    <button class="danger" id="delete-deck-btn">Delete Entire Deck</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script src="deck-edit.js"></script>
+</body>
+</html>
