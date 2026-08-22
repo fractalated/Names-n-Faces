@@ -373,6 +373,10 @@ export default {
         await env.PHOTOS.put(newKey, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
         sets.push("photo_key = ?");
         binds.push(newKey);
+      } else if ((form.get("removePhoto") || "").toString() === "true") {
+        if (row.photo_key) await env.PHOTOS.delete(row.photo_key);
+        sets.push("photo_key = ?");
+        binds.push(null);
       }
       if (sets.length === 0) return json({ error: "Nothing to update" }, 400, env);
       sets.push("updated_at = ?");

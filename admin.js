@@ -149,14 +149,50 @@ function renderManageList() {
     item.innerHTML = `
       <img alt="${s.name}">
       <div class="name">${s.name}${s.disambiguator ? ` (${s.disambiguator})` : ""}</div>
-      <div style="display:flex; gap:6px; justify-content:center; margin-top:4px;">
-        <button type="button" class="secondary edit-btn">Edit</button>
+      <input type="file" accept="image/*" class="photo-input hidden">
+      <div style="display:flex; gap:6px; justify-content:center; margin-top:4px; flex-wrap:wrap;">
+        <button type="button" class="secondary photo-btn">${s.hasPhoto ? "Replace Photo" : "Add Photo"}</button>
+        ${s.hasPhoto ? '<button type="button" class="secondary remove-photo-btn">Remove Photo</button>' : ""}
+      </div>
+      <div style="display:flex; gap:6px; justify-content:center; margin-top:6px;">
+        <button type="button" class="secondary edit-btn">Edit Name</button>
         <button type="button" class="danger delete-btn">Delete</button>
       </div>
     `;
     const img = item.querySelector("img");
     if (s.hasPhoto) fetchPhotoObjectUrl(s.photoUrl).then((url) => { img.src = url; });
     else img.src = PLACEHOLDER_SILHOUETTE_SVG;
+
+    item.querySelector(".photo-btn").addEventListener("click", () => {
+      item.querySelector(".photo-input").click();
+    });
+    item.querySelector(".photo-input").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const form = new FormData();
+      form.append("photo", await cropToSquare(file), "photo.jpg");
+      const res = await apiFetch(`/api/master/students/${s.id}`, { method: "PATCH", body: form });
+      if (!res.ok) {
+        alert((await res.json()).error || "Could not update photo");
+        return;
+      }
+      await loadManageList();
+    });
+
+    const removeBtn = item.querySelector(".remove-photo-btn");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        if (!confirm(`Remove ${s.name}'s photo? They'll show a placeholder until a new one is added.`)) return;
+        const form = new FormData();
+        form.append("removePhoto", "true");
+        const res = await apiFetch(`/api/master/students/${s.id}`, { method: "PATCH", body: form });
+        if (!res.ok) {
+          alert((await res.json()).error || "Could not remove photo");
+          return;
+        }
+        await loadManageList();
+      });
+    }
 
     item.querySelector(".edit-btn").addEventListener("click", async () => {
       const newName = prompt("Name:", s.name);
