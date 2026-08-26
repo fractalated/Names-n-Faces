@@ -141,33 +141,59 @@ exception for hand-typing a single name (see below):
   those specific candidates (photo + disambiguator) as a pick-one choice —
   they cannot invent a new resolution, only choose among what the admin
   already set up.
-- **Deliberate, scoped exception — hand-typing one name**: `deck-edit.js`'s
+- **Deliberate, scoped exception — hand-typing a name**: `deck-edit.js`'s
   "Add a Student" search and the home-page "Find a Student" search
-  (`index.html`) both use fuzzy matching (`similarity()` in `app.js`:
-  substring-match bonus, else normalized Levenshtein distance) to rank
-  candidates for a single, human-typed query — unlike the bulk paths above,
-  there's no batch to reason about consistently, and the user explicitly
-  wants "closest match, confirm it" rather than "exact or nothing."
+  (`index.html`) both use fuzzy matching (`matchStudentsByName()` in
+  `app.js`) to rank candidates for a human-typed query — unlike the bulk
+  paths above, there's no batch to reason about consistently, and the user
+  explicitly wants "closest match, confirm it" rather than "exact or
+  nothing."
+  - Both pages take **separate First Name / Last Name fields**, either
+    optional but at least one required — not one combined text box.
+    `matchStudentsByName` scores each query against its own name component
+    (`splitStoredName` splits the stored "Last, First" on the comma), so
+    matching is order-independent by construction. This replaced an earlier
+    single-field version that scored one query against the whole "Last,
+    First" string at once — a real bug report showed that typing "John
+    Stamison" (natural first-last order) scored badly against the stored
+    "Stamison, John" purely from word-order mismatch, even though "John" or
+    "Stamison" alone matched fine. Splitting the input removes the ambiguity
+    entirely instead of trying to guess word order.
+  - **Tight on last name, broad on first name, deliberately asymmetric** —
+    last names don't change, so `LAST_NAME_MATCH_THRESHOLD` (0.7) only
+    tolerates a small typo; first names get nicknamed/shortened/spelled
+    differently, so `FIRST_NAME_MATCH_THRESHOLD` (0.45) is more forgiving,
+    plus a small `NICKNAME_MAP` of common non-substring nickname pairs
+    (e.g. "Bob"/"Robert", "Jack"/"John" — most common nicknames, like
+    "Liz"/"Elizabeth", are already caught by `similarity()`'s substring
+    check and don't need the map). 0.45 rather than something looser: a
+    lower bar let short first names match near-unrelated ones purely from
+    edit-distance coincidence (e.g. "Bob" scoring against "Jon" by chance)
+    — tune this value with real short-name pairs in mind, not just typo
+    tolerance. When both fields are given, a student must satisfy *both*
+    (AND) — filling in more fields narrows results, never broadens them.
   - `deck-edit.js` never auto-assigns: every result requires a click ("This
     is them" or "Add anyway" with no match).
   - The home-page search (`index.html`) *does* auto-pick when a result is
     clearly the best one — score ≥0.95, or a ≥0.15 gap over the next-best
     candidate (see `CLEAR_MATCH_SCORE`/`CLEAR_MATCH_GAP` in `index.html`) —
     and only falls back to a picker when genuinely ambiguous (e.g.
-    searching "Smith" against several Smiths). This search is read-only
-    (look someone up, no deck/database mutation from the search itself), so
-    an auto-pick that's occasionally wrong just means re-searching more
-    specifically — much lower stakes than auto-assigning inside a deck.
+    searching last name "Smith" against several Smiths). This search is
+    read-only (look someone up, no deck/database mutation from the search
+    itself), so an auto-pick that's occasionally wrong just means
+    re-searching more specifically — much lower stakes than auto-assigning
+    inside a deck.
 - No fuzzy matching for anything *automated/bulk*, by design. A name that
   doesn't match at all in a bulk path (typo, different format, not yet
   enrolled) is an expected "not found" case surfaced to the teacher, not a
   bug to later "fix" with fuzzy logic — that would silently violate the
   exact-match design duplicate resolution depends on.
-- `normalizeNameKey`/`levenshtein`/`similarity`/`cropToSquare` all live in
-  `app.js` now, shared by every page that needs them (`admin.js`,
-  `deck-builder.js`, `deck-edit.js`, `index.html`) — don't add a second copy
-  to a page-specific file; this list used to have three independent copies
-  of `normalizeNameKey` before they were consolidated.
+- `normalizeNameKey`/`levenshtein`/`similarity`/`splitStoredName`/
+  `matchStudentsByName`/`cropToSquare` all live in `app.js` now, shared by
+  every page that needs them (`admin.js`, `deck-builder.js`, `deck-edit.js`,
+  `index.html`) — don't add a second copy to a page-specific file; this
+  list used to have three independent copies of `normalizeNameKey` before
+  they were consolidated.
 
 ## Non-admin missing-photo uploads
 

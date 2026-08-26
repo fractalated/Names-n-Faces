@@ -89,20 +89,24 @@ document.getElementById("remove-selected-btn").addEventListener("click", async (
 
 document.getElementById("add-search-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const input = document.getElementById("add-name-input");
-  const query = input.value.trim();
-  if (!query) return;
+  const firstQuery = document.getElementById("add-first-name").value.trim();
+  const lastQuery = document.getElementById("add-last-name").value.trim();
+  const errorEl = document.getElementById("add-search-error");
+  errorEl.textContent = "";
+  if (!firstQuery && !lastQuery) {
+    errorEl.textContent = "Enter a first or last name to search.";
+    return;
+  }
 
   const resultsEl = document.getElementById("match-results");
   resultsEl.innerHTML = "<p>Searching…</p>";
   const students = await loadMasterStudents();
-  const scored = students
-    .map((s) => ({ student: s, score: similarity(query, s.name) }))
-    .filter((r) => r.score >= 0.35)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+  // matchStudentsByName (app.js) scores first/last independently — order-
+  // independent, tight on last name, broad on first (nicknames/typos).
+  const scored = matchStudentsByName(students, { firstQuery, lastQuery }).slice(0, 5);
+  const queryLabel = [firstQuery, lastQuery].filter(Boolean).join(" ");
 
-  renderMatchResults(query, scored);
+  renderMatchResults(queryLabel, scored);
 });
 
 function renderMatchResults(query, scored) {
@@ -153,7 +157,8 @@ async function addEntry(rawName, masterStudentId) {
   }
   currentCards.push(data);
   renderCurrentList();
-  document.getElementById("add-name-input").value = "";
+  document.getElementById("add-first-name").value = "";
+  document.getElementById("add-last-name").value = "";
   document.getElementById("match-results").innerHTML = "";
 }
 

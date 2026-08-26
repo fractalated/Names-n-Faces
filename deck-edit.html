@@ -33,10 +33,12 @@
 
   <div class="card">
     <h2 style="margin-top:0;">Add a Student</h2>
-    <form id="add-search-form">
-      <input type="text" id="add-name-input" placeholder="Type a student's name…" required>
-      <button type="submit" style="margin-top:10px;">Find Match</button>
+    <form id="add-search-form" style="display:flex; gap:10px; flex-wrap:wrap;">
+      <input type="text" id="add-first-name" placeholder="First name" style="flex:1; min-width:140px;">
+      <input type="text" id="add-last-name" placeholder="Last name" style="flex:1; min-width:140px;">
+      <button type="submit" style="flex-shrink:0;">Find Match</button>
     </form>
+    <div class="error-msg" id="add-search-error"></div>
     <div id="match-results"></div>
   </div>
 

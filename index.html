@@ -51,11 +51,13 @@
 
   <div class="card">
     <h2 style="margin-top:0;">Find a Student</h2>
-    <p class="subtitle" style="margin-bottom:10px;">See what a student looks like, by name.</p>
-    <form id="student-search-form" style="display:flex; gap:10px;">
-      <input type="text" id="student-search-input" placeholder="Type a student's name…">
+    <p class="subtitle" style="margin-bottom:10px;">See what a student looks like, by name. Either field alone is fine.</p>
+    <form id="student-search-form" style="display:flex; gap:10px; flex-wrap:wrap;">
+      <input type="text" id="search-first-name" placeholder="First name" style="flex:1; min-width:140px;">
+      <input type="text" id="search-last-name" placeholder="Last name" style="flex:1; min-width:140px;">
       <button type="submit" style="flex-shrink:0;">Search</button>
     </form>
+    <div class="error-msg" id="search-error"></div>
     <div id="search-result"></div>
   </div>
 
@@ -182,27 +184,35 @@ document.getElementById("logout-link").addEventListener("click", (e) => {
 // user to choose when it's genuinely ambiguous (a name matching several
 // students about equally well). This is a deliberate, scoped exception to
 // the app's "no fuzzy matching" default (see similarity() in app.js) — the
-// same one deck-edit.js's "Add a Student" search already relies on.
-const SEARCH_SCORE_THRESHOLD = 0.35;
+// same one deck-edit.js's "Add a Student" search relies on. Matching is
+// split into separate first/last queries (matchStudentsByName in app.js) —
+// order-independent by construction, tight on last name, broad on first —
+// rather than scoring one combined string, which used to score a query
+// like "John Stamison" poorly against the stored "Stamison, John" purely
+// because of word order.
 const CLEAR_MATCH_SCORE = 0.95;
 const CLEAR_MATCH_GAP = 0.15;
 
 document.getElementById("student-search-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const query = document.getElementById("student-search-input").value.trim();
+  const firstQuery = document.getElementById("search-first-name").value.trim();
+  const lastQuery = document.getElementById("search-last-name").value.trim();
   const resultEl = document.getElementById("search-result");
+  const errorEl = document.getElementById("search-error");
   resultEl.innerHTML = "";
-  if (!query) return;
+  errorEl.textContent = "";
+  if (!firstQuery && !lastQuery) {
+    errorEl.textContent = "Enter a first or last name to search.";
+    return;
+  }
   resultEl.innerHTML = "<p>Searching…</p>";
 
   const students = await loadMasterStudents();
-  const scored = students
-    .map((s) => ({ student: s, score: similarity(query, s.name) }))
-    .filter((r) => r.score >= SEARCH_SCORE_THRESHOLD)
-    .sort((a, b) => b.score - a.score);
+  const scored = matchStudentsByName(students, { firstQuery, lastQuery });
+  const queryLabel = [firstQuery, lastQuery].filter(Boolean).join(" ");
 
   if (scored.length === 0) {
-    resultEl.innerHTML = `<p>No student found matching "${query}".</p>`;
+    resultEl.innerHTML = `<p>No student found matching "${queryLabel}".</p>`;
     return;
   }
 
@@ -213,7 +223,7 @@ document.getElementById("student-search-form").addEventListener("submit", async 
   if (isClear) {
     renderStudentResult(resultEl, top.student);
   } else {
-    renderCandidatePicker(resultEl, query, scored.slice(0, 5));
+    renderCandidatePicker(resultEl, queryLabel, scored.slice(0, 5));
   }
 });
 

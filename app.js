@@ -150,6 +150,114 @@ function similarity(query, candidateName) {
   return Math.max(0, 1 - dist / Math.max(q.length, c.length));
 }
 
+// "Stamison, John" -> {last: "stamison", first: "john"}. Every stored
+// master_students.name is written in this "Last, First" order (see
+// admin.js's import/add flows) — splitting on the comma is reliable.
+function splitStoredName(name) {
+  const idx = (name || "").indexOf(",");
+  if (idx === -1) return { last: normalizeNameKey(name), first: "" };
+  return {
+    last: normalizeNameKey(name.slice(0, idx)),
+    first: normalizeNameKey(name.slice(idx + 1)),
+  };
+}
+
+// Common nickname/formal-name equivalence groups, used only for broad
+// first-name matching (see matchStudentsByName below) — last names don't
+// get nicknamed, so this never applies there. Deliberately not exhaustive;
+// most common nicknames are already caught by similarity()'s substring
+// check (e.g. "Liz" ⊂ "Elizabeth"), so this list exists for the pairs that
+// AREN'T textual substrings of each other (e.g. "Bob"/"Robert",
+// "Jack"/"John") — extend it as real cases come up.
+const NICKNAME_GROUPS = [
+  ["robert", "rob", "bob", "bobby", "robbie"],
+  ["william", "will", "bill", "billy", "liam"],
+  ["james", "jim", "jimmy", "jamie"],
+  ["john", "jack", "johnny", "jon", "jonathan"],
+  ["richard", "rick", "ricky", "dick"],
+  ["charles", "charlie", "chuck", "chaz"],
+  ["michael", "mike", "mikey", "mick"],
+  ["margaret", "peggy", "maggie", "meg", "margie"],
+  ["patricia", "pat", "patty", "trish"],
+  ["dorothy", "dot", "dottie"],
+  ["katherine", "kate", "katie", "kathy", "kat", "kit"],
+  ["elizabeth", "beth", "eliza", "betty", "liz", "lizzy"],
+  ["alexander", "alex", "xander", "sasha"],
+  ["alexandra", "alex", "sandy", "lexi", "sasha"],
+  ["theodore", "ted", "teddy", "theo"],
+  ["edward", "ed", "eddie", "ted", "teddy"],
+  ["henry", "hank", "harry"],
+  ["francis", "frank", "frankie"],
+  ["francesca", "frankie", "fran"],
+  ["gerald", "jerry"],
+  ["lawrence", "larry"],
+  ["walter", "walt"],
+  ["harold", "harry", "hal"],
+  ["raymond", "ray"],
+  ["russell", "russ"],
+  ["nathaniel", "nathan", "nate"],
+];
+const NICKNAME_MAP = (() => {
+  const map = new Map();
+  for (const group of NICKNAME_GROUPS) {
+    for (const name of group) {
+      if (!map.has(name)) map.set(name, new Set());
+      for (const other of group) if (other !== name) map.get(name).add(other);
+    }
+  }
+  return map;
+})();
+
+function areNicknameEquivalent(a, b) {
+  const na = normalizeNameKey(a), nb = normalizeNameKey(b);
+  return NICKNAME_MAP.has(na) && NICKNAME_MAP.get(na).has(nb);
+}
+
+// Tight on last names (they don't change) — essentially exact, allowing
+// only a small typo. Broad on first names (nicknames, shortened forms,
+// spelling variants are common) — a much lower bar, plus the nickname
+// lookup above.
+const LAST_NAME_MATCH_THRESHOLD = 0.7;
+// 0.45, not lower — a looser bar let short, unrelated first names (e.g.
+// "Bob" vs "Jon") clear it purely from edit-distance coincidence. Real
+// nickname/shortened-name cases are already caught by similarity()'s
+// substring check or the NICKNAME_MAP above; this threshold mainly exists
+// to still tolerate a genuine typo (e.g. "Micheal" for "Michael").
+const FIRST_NAME_MATCH_THRESHOLD = 0.45;
+
+// Matches students by separate, optional first/last name queries — order-
+// independent by construction, since each query targets its own name
+// component instead of the whole "Last, First" string at once (a single
+// combined query like "John Stamison" used to score poorly against the
+// stored "Stamison, John" purely because of word order). At least one of
+// firstQuery/lastQuery must be given. A student must satisfy every
+// constraint actually provided (AND, not OR) — searching both fields
+// narrows the results, it doesn't broaden them. Returns
+// [{student, score}] sorted by score descending.
+function matchStudentsByName(students, { firstQuery, lastQuery } = {}) {
+  const fq = (firstQuery || "").trim();
+  const lq = (lastQuery || "").trim();
+  if (!fq && !lq) return [];
+  const results = [];
+  for (const student of students) {
+    const parts = splitStoredName(student.name);
+    let lastScore = null, firstScore = null;
+    if (lq) {
+      lastScore = similarity(lq, parts.last);
+      if (lastScore < LAST_NAME_MATCH_THRESHOLD) continue;
+    }
+    if (fq) {
+      firstScore = areNicknameEquivalent(fq, parts.first) ? 1 : similarity(fq, parts.first);
+      if (firstScore < FIRST_NAME_MATCH_THRESHOLD) continue;
+    }
+    const scores = [lastScore, firstScore].filter((s) => s !== null);
+    const combined = scores.reduce((a, b) => a + b, 0) / scores.length;
+    results.push({ student, score: combined });
+  }
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
+
 // Center-crop the largest square out of the source image, then scale to a
 // fixed, phone-friendly size. Applied to every photo before it's uploaded —
 // PDF extraction, an admin's manual add, or a teacher filling in a missing
