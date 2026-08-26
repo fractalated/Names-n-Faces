@@ -81,6 +81,33 @@ p.subtitle { color: var(--muted); margin-top: 0; }
 .topbar a:hover { text-decoration: underline; }
 @media (prefers-color-scheme: dark) { .topbar a { color: var(--thistle); } }
 
+/* Nav links styled as small, clearly-clickable button pills rather than
+   plain colored text — plain links tested as too easy to miss. Compact
+   padding/font-size keeps the topbar from growing taller than a single row. */
+.topbar-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.topbar-nav a {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  font-size: 0.82rem;
+  padding: 7px 12px;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.topbar-nav a:hover {
+  text-decoration: none;
+  background: rgba(88,45,131,0.08);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+@media (prefers-color-scheme: dark) {
+  .topbar-nav a:hover { background: rgba(209,201,230,0.1); border-color: var(--thistle); color: var(--thistle); }
+}
+
 button, .btn {
   display: inline-flex;
   align-items: center;
@@ -267,6 +294,7 @@ input[type="text"], input[type="password"], input[type="email"], select {
   .topbar { margin-bottom: 12px; padding-bottom: 10px; gap: 10px; }
   .topbar h1 { font-size: 1.3rem; }
   .brand-mark { height: 30px; }
+  .topbar-nav a { padding: 6px 10px; font-size: 0.76rem; }
   .card { padding: 14px; }
   .flashcard .progress { margin-bottom: 6px; }
   .flashcard .frame { padding: 8px; }

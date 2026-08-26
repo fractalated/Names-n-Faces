@@ -5,55 +5,10 @@ const deckId = params.get("d");
 
 let currentCards = [];
 let currentLabel = "";
-let masterStudents = null; // fetched once, lazily, on first search
 const selected = new Set();
 
-// Must match normalizeNameKey in worker/src/index.js (trim, lowercase,
-// collapse whitespace) — same convention as deck-builder.js.
-function normalizeNameKey(name) {
-  return (name || "").toString().trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function levenshtein(a, b) {
-  const m = a.length, n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  const dp = new Array(n + 1);
-  for (let j = 0; j <= n; j++) dp[j] = j;
-  for (let i = 1; i <= m; i++) {
-    let prev = dp[0];
-    dp[0] = i;
-    for (let j = 1; j <= n; j++) {
-      const temp = dp[j];
-      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
-      prev = temp;
-    }
-  }
-  return dp[n];
-}
-
-// Deliberate, scoped exception to the "no fuzzy matching" rule used
-// elsewhere (deck-builder.js's bulk import): here the user is typing ONE
-// name by hand and explicitly wants a "closest match, please confirm" flow,
-// which fuzzy scoring is exactly suited for. Substring matches (typo-free
-// partial names) score highest; everything else falls back to normalized
-// edit-distance similarity.
-function similarity(query, candidateName) {
-  const q = normalizeNameKey(query), c = normalizeNameKey(candidateName);
-  if (!q || !c) return 0;
-  if (q === c) return 1;
-  if (c.includes(q) || q.includes(c)) return 0.92 - Math.min(0.3, Math.abs(c.length - q.length) * 0.01);
-  const dist = levenshtein(q, c);
-  return Math.max(0, 1 - dist / Math.max(q.length, c.length));
-}
-
-async function ensureMasterStudents() {
-  if (masterStudents) return masterStudents;
-  const res = await apiFetch("/api/master/students");
-  const data = await res.json();
-  masterStudents = data.students;
-  return masterStudents;
-}
+// normalizeNameKey/levenshtein/similarity and loadMasterStudents() now live
+// in app.js, shared with deck-builder.js and the home-page search.
 
 async function loadDeck() {
   const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}/cards`);
@@ -140,7 +95,7 @@ document.getElementById("add-search-form").addEventListener("submit", async (e) 
 
   const resultsEl = document.getElementById("match-results");
   resultsEl.innerHTML = "<p>Searching…</p>";
-  const students = await ensureMasterStudents();
+  const students = await loadMasterStudents();
   const scored = students
     .map((s) => ({ student: s, score: similarity(query, s.name) }))
     .filter((r) => r.score >= 0.35)

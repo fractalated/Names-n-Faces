@@ -1,10 +1,8 @@
 requireLogin();
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
-// Must match normalizeNameKey in worker/src/index.js exactly.
-function normalizeNameKey(name) {
-  return (name || "").toString().trim().toLowerCase().replace(/\s+/g, " ");
-}
+// normalizeNameKey now lives in app.js (shared with deck-edit.js, admin.js,
+// and the home-page search) — do not redefine it here.
 
 // Groups a page's text items into visual lines (top to bottom, left to
 // right within a line) — the same idea as the header line-grouping used

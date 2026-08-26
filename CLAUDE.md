@@ -4,32 +4,53 @@ A private flashcard/quiz tool for teachers and administrators to learn
 student names and faces. There is **one shared, admin-owned student
 database** for the whole school (name + photo), built once a year from a
 single whole-school roster PDF and touched up incrementally as students
-enroll. Teachers never upload their own photos — they build "decks" (named
-flashcard sets) by uploading a plain list of names, which the app matches
-against the shared database. A deck always shows whatever the database
-currently has for each matched student, falling back to a generic
+enroll. Teachers never upload their own photos in bulk — they build "decks"
+(named flashcard sets) by uploading a plain list of names, which the app
+matches against the shared database. A deck always shows whatever the
+database currently has for each matched student, falling back to a generic
 silhouette if that student's record is gone (e.g. after an annual refresh)
 — so decks age out gracefully and a teacher just discards a stale one,
-rather than the app needing any change-notification machinery.
+rather than the app needing any change-notification machinery. Any teacher
+*can* fill in a missing photo one-off for a student they recognize (see
+"Non-admin missing-photo uploads" below) — the one deliberate, narrow
+exception to "teachers never write to the shared database."
 
 ## Architecture
 
 - **Frontend**: static HTML/CSS/JS at the repo root, served by GitHub Pages
   at `https://fractalated.github.io/Names-n-Faces/`.
   - `index.html` — login + signup + home page (grid of the logged-in user's
-    own decks, plus "+ Create New Deck")
+    own decks, a "Find a Student" search box, plus "+ Create New Deck")
   - `deck.html` — flashcard quiz for one deck (`?d=<deckId>`)
+  - `deck-view.html` — read-only "View All" study sheet for one deck (every
+    card in a grid at once, no shuffle/reveal) — linked from each deck tile
+    and from `deck.html`; also where a teacher fills in a missing photo for
+    one of their deck's students (see below)
+  - `deck-edit.html` / `deck-edit.js` — rename a deck, add a student by
+    fuzzy name search (own "Add a Student" flow — see Duplicate names/
+    matching below), multi-select removal of current students, delete the
+    whole deck
   - `deck-builder.html` / `deck-builder.js` — upload a name list, name the
     deck; matches names against the master database (all users)
   - `admin.html` / `admin.js` — **admin-only**: import/replace the whole
     master database from a roster PDF, add a single student, browse/edit/
-    delete master students
+    delete master students (including replacing or removing any student's
+    photo — the *unrestricted* version of photo management; contrast with
+    the narrow non-admin version below)
   - `users.html` / `users.js` — admin-only: list every account, hard-delete
     one (deletes their decks only — never touches the shared master database)
-  - `app.js` — shared auth/API helpers (token storage, `apiFetch`,
-    `loadDecks()`/`loadMe()` — fetched per logged-in user and cached in
-    memory, cleared on login/logout — plus the placeholder-silhouette SVG
-    and `loadCardImage()`)
+  - `app.js` — shared helpers loaded on every page before the page-specific
+    script: auth (`apiFetch`, `getToken`/`setToken`/`clearToken`,
+    `requireLogin`), cached loaders (`loadDecks()`, `loadMe()`,
+    `loadMasterStudents()` — all in-memory, cleared on login/logout), the
+    placeholder-silhouette SVG + `loadCardImage()`, photo prep
+    (`cropToSquare()`), the shared fuzzy-matching trio
+    (`normalizeNameKey()`/`levenshtein()`/`similarity()` — see Duplicate
+    names below), and the non-admin missing-photo flow
+    (`uploadMissingPhoto()`/`renderAddPhotoControl()`). Any function used by
+    more than one page lives here — don't reintroduce a second copy in a
+    page-specific file (this happened once already with the matching trio;
+    see the git history around the home-page search feature).
 - **Backend**: Cloudflare Worker at `worker/`, deployed to
   `https://names-n-faces-api.fractalated.workers.dev`.
   - `worker/src/index.js` — all API routes
@@ -42,28 +63,40 @@ rather than the app needing any change-notification machinery.
     served through the Worker's authenticated `/api/master/photo/:id`
     route, never public). D1 database `names-n-faces-db` stores `users`,
     `master_students`, `decks`, and `deck_entries`.
+- **Branding**: the whole app uses LuHi (Lutheran High School) brand colors/
+  type (`style.css`'s `:root` custom properties, cited from the LuHi Brand
+  Standards doc kept in `assets/` — not tracked in git, see below). Every
+  page's `.topbar` includes a `<picture>` logo (`assets/logo-purple.png`
+  light / `assets/logo-white.png` dark, swapped via
+  `prefers-color-scheme`) inside a `.topbar-title` wrapper. `assets/` also
+  holds print-resolution source art and brand-standard PDFs that are
+  `.gitignore`d on purpose (only the small optimized `logo-*.png` files are
+  tracked/served) — don't `git add -f` those back in.
 
 ## Data model
 
-- **`master_students`** — one shared table, admin-writable only, readable
-  by any authenticated user. `name_key` (via `normalizeNameKey`: trim,
-  lowercase, collapse whitespace) is computed at write time and is the
-  single source of truth for exact-match name lookups — it must be
-  computed identically everywhere a name is written or looked up, server
-  and client alike (the deck-builder's client-side copy is commented to
-  say so). `disambiguator` is a nullable admin-entered nickname/initial,
-  set only when two distinct students share a `name_key` (see Duplicate
-  names below). `photo_key` is nullable — `NULL` means "no photo, render
-  the placeholder silhouette," not an error state.
+- **`master_students`** — one shared table, admin-writable for most fields,
+  readable by any authenticated user, and narrowly writable by any user for
+  one specific case (see "Non-admin missing-photo uploads"). `name_key` (via
+  `normalizeNameKey`: trim, lowercase, collapse whitespace) is computed at
+  write time and is the single source of truth for exact-match name lookups
+  — it must be computed identically everywhere a name is written or looked
+  up, server and every client copy alike. `disambiguator` is a nullable
+  admin-entered nickname/initial, set only when two distinct students share
+  a `name_key` (see Duplicate names below). `photo_key` is nullable —
+  `NULL` means "no photo, render the placeholder silhouette," not an error
+  state.
 - **`decks`** (per-user) / **`deck_entries`** — a deck is just a named list
   of entries. Each entry stores `raw_name_text` (what was actually in the
   uploaded list) and a **soft reference** `master_student_id` (nullable, no
   FK/cascade). `GET /api/decks/:id/cards` LEFT JOINs entries to
-  `master_students`, so a null or since-deleted reference just resolves to
-  `hasPhoto:false` + the raw text — never an error, never a sync step. This
-  is the entire mechanism behind "decks always reflect the current
-  database": nothing needs to notice a change happened, because every read
-  is already live.
+  `master_students` and returns both the resolved photo/name info *and* the
+  raw `masterStudentId` itself (needed client-side to know whether a
+  no-photo card is attachable — see below) — a null or since-deleted
+  reference just resolves to `hasPhoto:false` + the raw text, never an
+  error, never a sync step. This is the entire mechanism behind "decks
+  always reflect the current database": nothing needs to notice a change
+  happened, because every read is already live.
 - Binding a deck entry to a **student id** rather than re-matching name text
   on every read matters for two reasons: a later admin correction to a
   misread name (`PATCH /api/master/students/:id`) is picked up by every
@@ -75,14 +108,15 @@ rather than the app needing any change-notification machinery.
   everyone — even students who are unchanged. This means every deck across
   every teacher goes stale simultaneously after a replace, **by design**:
   that's what makes "discard this deck" (an ordinary, unconditional delete,
-  available any time) the right and sufficient tool, rather than needing
-  any staleness-detection or login-time change prompt.
+  available any time via `deck-edit.html`) the right and sufficient tool,
+  rather than needing any staleness-detection or login-time change prompt.
 
-## Duplicate names
+## Duplicate names and fuzzy matching
 
 Two students can share an exact name (rare, but it happens). This is
 resolved **once, centrally, by the admin**, at master-import/add time —
-never left for a teacher to improvise:
+never left for a teacher to improvise, with one deliberate, scoped
+exception for hand-typing a single name (see below):
 - Bulk import (`admin.js`'s `findDuplicateGroups`/`resolveDuplicates`):
   every name repeated within the freshly-extracted batch gets a resolver
   before anything saves — "same person" (pick which photo to keep) or
@@ -91,16 +125,73 @@ never left for a teacher to improvise:
 - Single add (`POST /api/master/students`): a name that already exists
   returns `409 {candidates}`; the admin either cancels or supplies a
   `disambiguator` and retries with `forceDistinct=true`.
-- A teacher building a deck only ever sees the *admin's own* resolution:
-  if their uploaded list's name matches more than one `master_students` row
-  under the same `name_key`, `deck-builder.js` shows those specific
-  candidates (photo + disambiguator) as a pick-one choice. They cannot
-  invent a new resolution — only choose among what the admin already set up.
-- No fuzzy matching, anywhere, by design. A name that doesn't match at all
-  (typo, different format, not yet enrolled) is an expected "not found"
-  case surfaced to the teacher, not a bug to later "fix" with fuzzy logic —
-  that would silently violate the exact-match design duplicate resolution
-  depends on.
+- Bulk deck-building (`deck-builder.js`): matches each line of an uploaded
+  name list against the **known** `master_students` list (substring search
+  on `name_key`) rather than regex-extracting an unknown name's boundaries.
+  A real sample list (`Create a Report.pdf`) confirmed why: wide report
+  columns collapse to single spaces once text items are joined, making a
+  genuine two-word first name (the real "Bahr, Hunter Shockley")
+  indistinguishable from a name plus an accidentally-absorbed trailing
+  "Status"/"Grade Level" column word, under any regex that allows an
+  optional extra name-word. Searching for names already known to exist
+  sidesteps that ambiguity entirely; a generic name-shaped regex is used
+  only as a last-resort, purely informational fallback for lines matching
+  nothing, never for real matching. If their list's name matches more than
+  one `master_students` row under the same `name_key`, the teacher sees
+  those specific candidates (photo + disambiguator) as a pick-one choice —
+  they cannot invent a new resolution, only choose among what the admin
+  already set up.
+- **Deliberate, scoped exception — hand-typing one name**: `deck-edit.js`'s
+  "Add a Student" search and the home-page "Find a Student" search
+  (`index.html`) both use fuzzy matching (`similarity()` in `app.js`:
+  substring-match bonus, else normalized Levenshtein distance) to rank
+  candidates for a single, human-typed query — unlike the bulk paths above,
+  there's no batch to reason about consistently, and the user explicitly
+  wants "closest match, confirm it" rather than "exact or nothing."
+  - `deck-edit.js` never auto-assigns: every result requires a click ("This
+    is them" or "Add anyway" with no match).
+  - The home-page search (`index.html`) *does* auto-pick when a result is
+    clearly the best one — score ≥0.95, or a ≥0.15 gap over the next-best
+    candidate (see `CLEAR_MATCH_SCORE`/`CLEAR_MATCH_GAP` in `index.html`) —
+    and only falls back to a picker when genuinely ambiguous (e.g.
+    searching "Smith" against several Smiths). This search is read-only
+    (look someone up, no deck/database mutation from the search itself), so
+    an auto-pick that's occasionally wrong just means re-searching more
+    specifically — much lower stakes than auto-assigning inside a deck.
+- No fuzzy matching for anything *automated/bulk*, by design. A name that
+  doesn't match at all in a bulk path (typo, different format, not yet
+  enrolled) is an expected "not found" case surfaced to the teacher, not a
+  bug to later "fix" with fuzzy logic — that would silently violate the
+  exact-match design duplicate resolution depends on.
+- `normalizeNameKey`/`levenshtein`/`similarity`/`cropToSquare` all live in
+  `app.js` now, shared by every page that needs them (`admin.js`,
+  `deck-builder.js`, `deck-edit.js`, `index.html`) — don't add a second copy
+  to a page-specific file; this list used to have three independent copies
+  of `normalizeNameKey` before they were consolidated.
+
+## Non-admin missing-photo uploads
+
+Any authenticated user — not just the admin — can fill in a photo for a
+master student who doesn't have one yet, via `POST
+/api/master/students/:id/photo`. This is a deliberate, narrow carve-out in
+an otherwise admin-only-write table, made safe by three hard constraints
+enforced **server-side**:
+1. It only ever sets `photo_key` when it is currently `NULL` — the route
+   returns `409` if the student already has a photo. A non-admin can never
+   overwrite or remove an existing photo (that stays admin-only, via
+   `PATCH .../students/:id` with `removePhoto=true` or a new `photo`).
+2. It can only touch `photo_key` — no `name`/`disambiguator` field is
+   accepted by this route at all.
+3. The client-side entry points only ever offer this button when a card
+   already resolves to a real `master_student_id` with `hasPhoto:false`
+   (`deck-view.html`'s study grid, and a "not found" home-page search result
+   has no id to attach to and correctly gets no button) — but the *real*
+   guarantee is server-side constraint #1, not the UI gating, same as every
+   other admin-boundary check in this app.
+
+Uses the same `cropToSquare`/upload pattern as admin's own photo tools
+(`uploadMissingPhoto()` in `app.js`), and the same placeholder-silhouette
+fallback everywhere else if the upload never happens.
 
 ## Auth model
 
@@ -113,7 +204,8 @@ secret (see `signToken`/`verifyToken`). `requireAuth` resolves the token to
 `isAdmin` server-side on every call — `admin.html`'s client-side redirect
 for non-admins is UX only, never the real authorization boundary. Routes
 reading `master_students`/`master/photo` require auth but are **not**
-scoped by `user_id` — that data is intentionally shared. `decks`/
+scoped by `user_id` — that data is intentionally shared, and (per the
+missing-photo carve-out above) not even fully admin-write-locked. `decks`/
 `deck_entries` routes **are** scoped by `user_id`.
 
 Passwords are hashed with PBKDF2-SHA256 (Web Crypto `crypto.subtle`, no
@@ -162,45 +254,50 @@ came before this rebuild — do not rewrite):
   headshot) was previously silently dropped. `extractAllStudents`
   explicitly collects these unclaimed texts, OCRs them too, and creates a
   no-photo student record instead of losing the row.
-- **Header/footer false positives on that orphan-text path.** The first
-  version of this counted *every* unclaimed text blob as a potential
-  no-photo student, which meant the page-1 header block (title, class/room/
-  pattern fields, the teacher's own "Last, First"-shaped signature line)
-  got miscounted as fake students. Fixed with two filters:
-  (a) exclude the top ~22% of **page 1 only** (continuation pages have no
-  header at all on this report style) before ever treating a text blob as
-  an orphan candidate, and (b) require the OCR'd result to actually look
-  like `"Something, Something"` (`NAME_SHAPE_RE`) before accepting it —
-  catches any other stray footer/URL/timestamp text that might slip
-  through position-based filtering alone.
+- **Header/footer false positives on that orphan-text path.** The naive
+  first version counted *every* unclaimed text blob as a potential
+  no-photo student. Two things slipped through before the current filters:
+  the page-1 header block (title, class/room/pattern fields, the teacher's
+  own "Last, First"-shaped signature line), and — found only once tested
+  against the real, full 29-page production PDF — the *browser's own print
+  margin* (a small date/time + "Untitled Document" line), which turned out
+  to repeat on **every** page, not just page 1 as a visual spot-check had
+  suggested, and got miscounted as the same fake "student" dozens of times.
+  Fixed with: (a) excluding a top margin band on every page — a small ~8%
+  band on continuation pages (just enough for the recurring print-margin
+  line) and a much larger ~22% band on page 1 only (the substantial header
+  block) — safe to be generous here since this only filters *orphan*
+  (unpaired) text, never a real photo+name pair; (b) requiring the OCR'd
+  result to actually look like `"Something, Something"` (`NAME_SHAPE_RE`);
+  and (c) explicitly rejecting anything date-shaped (`LOOKS_LIKE_DATE_RE`)
+  even though a date+time joined by a comma otherwise satisfies the
+  comma-shape check just as well as a real name does.
 - **Broken-image-icon photos that** ***do*** **get photo-classified.** The
   deterministic pipeline has no signal to distinguish a broken-image icon
   from a real headshot without AI vision (which this app deliberately never
   uses for detection). The reliable fix is human-in-the-loop: every
-  thumbnail in the review grid gets a "No real photo — remove" toggle.
-- **Deck-list name matching is deliberately not regex-based.**
-  `deck-builder.js` matches each line of an uploaded name list against the
-  **known** `master_students` list (substring search on `name_key`) rather
-  than regex-extracting an unknown name's boundaries. A real sample list
-  (`Create a Report.pdf`) confirmed why: wide report columns collapse to
-  single spaces once text items are joined, making a genuine two-word
-  first name (the real "Bahr, Hunter Shockley") indistinguishable from a
-  name plus an accidentally-absorbed trailing "Status"/"Grade Level"
-  column word, under any regex that allows an optional extra name-word.
-  Searching for names already known to exist sidesteps that ambiguity
-  entirely; a generic name-shaped regex is used only as a last-resort,
-  purely informational fallback for lines matching nothing (so the "not
-  found" list has *something* readable to show), never for real matching.
+  thumbnail in the review grid gets a "No real photo — remove" toggle. Even
+  so, a handful slipped through one real production import (an automated
+  test run skipped that manual step) — found afterward by scanning photo
+  file sizes (a broken-icon crop compresses far smaller than a real
+  headshot) and confirmed by actually viewing each flagged image before
+  correcting it. Don't assume a photo is "real" just because `hasPhoto` is
+  true.
 
 ## Import scale / chunking
 
 A whole-school import (~1000+ students, ~30 pages) is far bigger than any
 per-class import ever was. `admin.js`'s `saveImport` splits the save into
 ~150-student chunks against `POST /api/master/import` (`mode:"replace"` on
-the first chunk only, `"append"` after) rather than one giant request,
-both because a single Worker invocation is capped at 1000 subrequests (R2
+the first chunk only, `"append"` after) rather than one giant request, both
+because a single Worker invocation is capped at 1000 subrequests (R2
 `.put()` calls count against that) and to give real progress feedback.
 `env.DB.batch(...)` is used for bulk inserts, not per-row `.run()` calls.
+Within each chunk, every photo is passed through `cropToSquare` **in
+parallel** (`Promise.all`, not a sequential loop) — cropping is a real
+per-image cost (~1s+ each for `createImageBitmap`/canvas/`toBlob`), and
+awaiting them one at a time made a ~1000-student import take tens of
+minutes before the first byte was even uploaded.
 
 ## Testing notes
 
@@ -210,7 +307,11 @@ committed to the repo — but Homebrew's `poppler` package (`brew install
 poppler`) provides both and is safe to install locally for structural
 inspection/debugging (page text, page counts) without needing a browser.
 Full pipeline verification (pixel/blob detection, real OCR accuracy) still
-needs the live app in a browser with a real roster PDF.
+needs the live app in a browser with a real roster PDF — this project has
+repeatedly found real bugs (the print-margin duplicate, the broken-icon
+photos, a client-side name-matching edge case) that only showed up against
+actual production data, not synthetic tests. Validate accordingly before
+calling an import-pipeline change done.
 
 The worker's auth/data-model logic (signup, login, master CRUD, decks CRUD,
 duplicate handling, admin cascade delete) **can** be exercised without a
@@ -224,32 +325,30 @@ were introduced, and won't apply cleanly to a truly empty local database.
 
 ## Deck editing (delete deck, add/remove students)
 
-Every deck tile on the home screen (`index.html`) has "Edit" and "Delete"
+Every deck tile on the home screen (`index.html`) has "Practice" (quiz),
+"View All" (`deck-view.html`), "Edit" (`deck-edit.html`), and "Delete"
 actions — available to whichever user owns that deck, admin or not, since
 decks are always per-user (`DELETE /api/decks/:id` is already scoped by
-`user_id`, so this needed no new auth logic, only UI). "Edit" opens
-`deck-edit.html`/`deck-edit.js`, which shows the whole deck as a checkbox
-grid ("select students, Remove Selected" — bulk client-side loop over
-`DELETE /api/decks/:id/entries/:entryId`, not a bespoke bulk-delete route)
-plus a "type a name, confirm the match" add flow.
+`user_id`, so this needed no new auth logic, only UI). `deck-edit.html`
+shows the whole deck as a checkbox grid ("select students, Remove Selected"
+— bulk client-side loop over `DELETE /api/decks/:id/entries/:entryId`, not
+a bespoke bulk-delete route), a "type a name, confirm the match" add flow
+(see the fuzzy-matching exception above), a rename form
+(`PATCH /api/decks/:id`), and a delete-whole-deck danger zone.
 
-**`POST /api/decks/:id/entries`** (add one entry) and **`DELETE
-/api/decks/:id/entries/:entryId`** (remove one entry) are the two routes
-this added. Both re-verify deck ownership (`WHERE id = ? AND user_id = ?`)
-before touching anything, same pattern as every other per-user deck route.
+`POST /api/decks/:id/entries` (add one entry) and
+`DELETE /api/decks/:id/entries/:entryId` (remove one entry) both re-verify
+deck ownership (`WHERE id = ? AND user_id = ?`) before touching anything,
+same pattern as every other per-user deck route.
 
-**Deliberate exception to "no fuzzy matching":** the top-level "Duplicate
-names" section of this doc says no fuzzy matching, anywhere, by design —
-that rule is about `deck-builder.js`'s bulk import, where exact `name_key`
-matching is what makes duplicate-name resolution well-defined (see that
-section). Typing one name by hand to add to an existing deck is a
-different situation: there's no batch to reason about consistently, and
-the user explicitly asked for "closest match, then I confirm." So
-`deck-edit.js` has its own `similarity()` (substring bonus, else
-normalized Levenshtein distance) purely for ranking candidates to show the
-user — it never auto-assigns a match. The user always clicks "This is
-them" (sends that student's exact id) or "Add anyway" (sends
-`masterStudentId: null`, same unmatched/placeholder-photo path bulk import
-already uses). If this exception ever needs to spread to another flow,
-extract `similarity()`/`levenshtein()` into a shared file rather than
-copy-pasting a third time.
+## Nav styling
+
+Topbar nav links (`.topbar-nav a` in `style.css`) are styled as small
+bordered button-pills, not plain colored text — plain links tested as too
+easy to miss. Every topbar-bearing page wraps its nav links in
+`<div class="topbar-nav">` (replacing the old bare `<div>` +
+`&nbsp;&middot;&nbsp;` separator pattern — don't reintroduce the middot
+separators, the button borders provide the visual separation now). Keep
+new nav links inside that wrapper so they pick up the pill styling
+automatically; a link left in a bare `<div>` will fall back to the older,
+harder-to-see plain-text `.topbar a` style.

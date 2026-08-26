@@ -42,13 +42,21 @@
         <p class="subtitle">Pick a deck to study, or build a new one.</p>
       </div>
     </div>
-    <div>
+    <div class="topbar-nav">
       <a href="admin.html" id="master-db-link" class="hidden">Master Database</a>
-      &nbsp;&middot;&nbsp;
       <a href="users.html" id="manage-users-link" class="hidden">Manage Users</a>
-      &nbsp;&middot;&nbsp;
       <a href="#" id="logout-link">Log Out</a>
     </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;">Find a Student</h2>
+    <p class="subtitle" style="margin-bottom:10px;">See what a student looks like, by name.</p>
+    <form id="student-search-form" style="display:flex; gap:10px;">
+      <input type="text" id="student-search-input" placeholder="Type a student's name…">
+      <button type="submit" style="flex-shrink:0;">Search</button>
+    </form>
+    <div id="search-result"></div>
   </div>
 
   <div class="grid" id="deck-grid"></div>
@@ -169,6 +177,78 @@ document.getElementById("logout-link").addEventListener("click", (e) => {
   e.preventDefault();
   logout();
 });
+
+// "Find a Student" — best-effort, auto-pick the clear winner; only ask the
+// user to choose when it's genuinely ambiguous (a name matching several
+// students about equally well). This is a deliberate, scoped exception to
+// the app's "no fuzzy matching" default (see similarity() in app.js) — the
+// same one deck-edit.js's "Add a Student" search already relies on.
+const SEARCH_SCORE_THRESHOLD = 0.35;
+const CLEAR_MATCH_SCORE = 0.95;
+const CLEAR_MATCH_GAP = 0.15;
+
+document.getElementById("student-search-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const query = document.getElementById("student-search-input").value.trim();
+  const resultEl = document.getElementById("search-result");
+  resultEl.innerHTML = "";
+  if (!query) return;
+  resultEl.innerHTML = "<p>Searching…</p>";
+
+  const students = await loadMasterStudents();
+  const scored = students
+    .map((s) => ({ student: s, score: similarity(query, s.name) }))
+    .filter((r) => r.score >= SEARCH_SCORE_THRESHOLD)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) {
+    resultEl.innerHTML = `<p>No student found matching "${query}".</p>`;
+    return;
+  }
+
+  const top = scored[0];
+  const second = scored[1];
+  const isClear = top.score >= CLEAR_MATCH_SCORE || !second || (top.score - second.score) >= CLEAR_MATCH_GAP;
+
+  if (isClear) {
+    renderStudentResult(resultEl, top.student);
+  } else {
+    renderCandidatePicker(resultEl, query, scored.slice(0, 5));
+  }
+});
+
+function renderStudentResult(container, student) {
+  container.innerHTML = "";
+  const list = document.createElement("div");
+  list.className = "roster-list";
+  container.appendChild(list);
+  const card = document.createElement("div");
+  card.className = "roster-item";
+  card.innerHTML = `<img alt="${student.name}"><div class="name">${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</div>`;
+  loadCardImage(card.querySelector("img"), student);
+  list.appendChild(card);
+  if (!student.hasPhoto) {
+    renderAddPhotoControl(card, student.id, () => {
+      loadCardImage(card.querySelector("img"), { hasPhoto: true, photoUrl: `/api/master/photo/${student.id}` });
+    });
+  }
+}
+
+function renderCandidatePicker(container, query, scored) {
+  container.innerHTML = `<p>A few students match "${query}" — pick the right one:</p>`;
+  const list = document.createElement("div");
+  list.className = "roster-list";
+  container.appendChild(list);
+  for (const { student } of scored) {
+    const item = document.createElement("div");
+    item.className = "roster-item";
+    item.style.cursor = "pointer";
+    item.innerHTML = `<img alt="${student.name}"><div class="name">${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</div>`;
+    loadCardImage(item.querySelector("img"), student);
+    item.addEventListener("click", () => renderStudentResult(container, student));
+    list.appendChild(item);
+  }
+}
 
 setMode("login");
 render();

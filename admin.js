@@ -19,28 +19,9 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
   });
 });
 
-// Must match normalizeNameKey in worker/src/index.js exactly — this is the
-// single normalization rule name-matching depends on everywhere.
-function normalizeNameKey(name) {
-  return (name || "").toString().trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-// Center-crop the largest square out of the source image, then scale to a
-// fixed, phone-friendly size. Applied to every photo before it's uploaded —
-// from PDF extraction or a manual single add alike — so storage stays small
-// and every card looks consistent regardless of the source photo's shape.
-async function cropToSquare(blob, targetSize = 320) {
-  const img = await createImageBitmap(blob);
-  const side = Math.min(img.width, img.height);
-  const sx = (img.width - side) / 2;
-  const sy = (img.height - side) / 2;
-  const canvas = document.createElement("canvas");
-  canvas.width = targetSize;
-  canvas.height = targetSize;
-  canvas.getContext("2d").drawImage(img, sx, sy, side, side, 0, 0, targetSize, targetSize);
-  img.close?.();
-  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
-}
+// normalizeNameKey and cropToSquare now live in app.js (shared with
+// deck-edit.js, deck-builder.js, and the home-page search) — do not
+// redefine them here.
 
 // ---------- Add Student ----------
 

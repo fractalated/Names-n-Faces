@@ -401,6 +401,33 @@ export default {
       return json({ ok: true }, 200, env);
     }
 
+    // Any authenticated user (not just admin) may fill in a photo for a
+    // student who doesn't have one yet — deliberately narrower than the
+    // admin-only PATCH above: this route only ever sets photo_key when it's
+    // currently NULL (409 otherwise), and can never touch name/disambiguator
+    // or replace/remove an existing photo. That's what makes it safe to open
+    // up broadly — a non-admin can only ever fill a real gap, never
+    // overwrite or vandalize the shared database.
+    const masterPhotoAddMatch = pathname.match(/^\/api\/master\/students\/([\w-]+)\/photo$/);
+    if (masterPhotoAddMatch && request.method === "POST") {
+      const row = await env.DB.prepare(
+        "SELECT id, photo_key FROM master_students WHERE id = ?"
+      ).bind(masterPhotoAddMatch[1]).first();
+      if (!row) return json({ error: "Not found" }, 404, env);
+      if (row.photo_key) return json({ error: "This student already has a photo" }, 409, env);
+      const form = await request.formData();
+      const photo = form.get("photo");
+      if (!(photo instanceof File) || photo.size === 0) {
+        return json({ error: "A photo is required" }, 400, env);
+      }
+      const photoKey = `${row.id}.${extFromType(photo.type)}`;
+      await env.PHOTOS.put(photoKey, await photo.arrayBuffer(), { httpMetadata: { contentType: photo.type } });
+      await env.DB.prepare(
+        "UPDATE master_students SET photo_key = ?, updated_at = ? WHERE id = ?"
+      ).bind(photoKey, Date.now(), row.id).run();
+      return json({ id: row.id, hasPhoto: true, photoUrl: `/api/master/photo/${row.id}` }, 200, env);
+    }
+
     const masterPhotoMatch = pathname.match(/^\/api\/master\/photo\/([\w-]+)$/);
     if (masterPhotoMatch && request.method === "GET") {
       const row = await env.DB.prepare(
@@ -471,6 +498,7 @@ export default {
         disambiguator: r.disambiguator || null,
         hasPhoto: !!r.has_photo,
         photoUrl: r.master_id ? `/api/master/photo/${r.master_id}` : null,
+        masterStudentId: r.master_id || null,
       }));
       return json({ label: deck.label, cards }, 200, env);
     }
