@@ -182,7 +182,25 @@ exception for hand-typing a single name (see below):
     read-only (look someone up, no deck/database mutation from the search
     itself), so an auto-pick that's occasionally wrong just means
     re-searching more specifically — much lower stakes than auto-assigning
-    inside a deck.
+    inside a deck. **A high top score alone must never short-circuit past a
+    close/tied second candidate** — the real database has two students both
+    named exactly "Stamison", so searching that last name alone produces two
+    genuine 1.0 ties; the auto-pick check requires either no second
+    candidate, a real score gap, or the top being clearly stronger than a
+    meaningfully weaker runner-up, never "top score is high" in isolation.
+  - **A nickname match must never outrank or tie a literal exact match** —
+    `matchStudentsByName`'s first-name scoring takes `Math.max(directScore,
+    0.8)` for a nickname-equivalent pair, not an unconditional `1`. Found via
+    a real report: searching first name "John" alone matched every "Jack"/
+    "Jonathan" (nicknames of John) at the same flat 1.0 as every actual
+    "John", and with a fixed 5-result cap, alphabetically-early nickname
+    matches crowded a real "Stamison, John" out of view entirely.
+  - **Results are paginated with a "Show More" button, never hard-capped**
+    (`CANDIDATE_PAGE_SIZE`/`MATCH_PAGE_SIZE`, 10 per page in both
+    `index.html` and `deck-edit.js`) — a broad first-name search can
+    legitimately match many students, and silently truncating the list risks
+    hiding the one the user actually wanted, which is exactly what the fixed
+    5-cap did before this.
 - No fuzzy matching for anything *automated/bulk*, by design. A name that
   doesn't match at all in a bulk path (typo, different format, not yet
   enrolled) is an expected "not found" case surfaced to the teacher, not a

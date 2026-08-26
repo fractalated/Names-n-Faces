@@ -103,11 +103,17 @@ document.getElementById("add-search-form").addEventListener("submit", async (e) 
   const students = await loadMasterStudents();
   // matchStudentsByName (app.js) scores first/last independently — order-
   // independent, tight on last name, broad on first (nicknames/typos).
-  const scored = matchStudentsByName(students, { firstQuery, lastQuery }).slice(0, 5);
+  const scored = matchStudentsByName(students, { firstQuery, lastQuery });
   const queryLabel = [firstQuery, lastQuery].filter(Boolean).join(" ");
 
   renderMatchResults(queryLabel, scored);
 });
+
+// Shows results a page at a time with a "Show More" button rather than a
+// hard cap — a broad first-name search can legitimately match many
+// students (nicknames especially), and silently truncating risks hiding
+// the one the user actually wanted.
+const MATCH_PAGE_SIZE = 10;
 
 function renderMatchResults(query, scored) {
   const resultsEl = document.getElementById("match-results");
@@ -116,23 +122,42 @@ function renderMatchResults(query, scored) {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = scored.length
-    ? `<p>Closest match${scored.length > 1 ? "es" : ""} for "${query}" — confirm the right one:</p>`
+    ? `<p>${scored.length} possible match${scored.length === 1 ? "" : "es"} for "${query}" — confirm the right one:</p>`
     : `<p>No close matches found for "${query}" in the database.</p>`;
+  resultsEl.appendChild(card);
 
-  for (const { student } of scored) {
-    const row = document.createElement("div");
-    row.className = "match-row";
-    row.innerHTML = `<img alt="${student.name}"><span>${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</span>`;
-    const img = row.querySelector("img");
-    if (student.hasPhoto) fetchPhotoObjectUrl(student.photoUrl).then((url) => { img.src = url; });
-    else img.src = PLACEHOLDER_SILHOUETTE_SVG;
+  const rows = document.createElement("div");
+  card.appendChild(rows);
 
-    const confirmBtn = document.createElement("button");
-    confirmBtn.textContent = "This is them";
-    confirmBtn.addEventListener("click", () => addEntry(student.name, student.id));
-    row.appendChild(confirmBtn);
-    card.appendChild(row);
+  const showMoreBtn = document.createElement("button");
+  showMoreBtn.type = "button";
+  showMoreBtn.className = "secondary hidden";
+  showMoreBtn.style.marginTop = "6px";
+  card.appendChild(showMoreBtn);
+
+  let shown = 0;
+  function showNextPage() {
+    for (const { student } of scored.slice(shown, shown + MATCH_PAGE_SIZE)) {
+      const row = document.createElement("div");
+      row.className = "match-row";
+      row.innerHTML = `<img alt="${student.name}"><span>${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</span>`;
+      const img = row.querySelector("img");
+      if (student.hasPhoto) fetchPhotoObjectUrl(student.photoUrl).then((url) => { img.src = url; });
+      else img.src = PLACEHOLDER_SILHOUETTE_SVG;
+
+      const confirmBtn = document.createElement("button");
+      confirmBtn.textContent = "This is them";
+      confirmBtn.addEventListener("click", () => addEntry(student.name, student.id));
+      row.appendChild(confirmBtn);
+      rows.appendChild(row);
+    }
+    shown = Math.min(shown + MATCH_PAGE_SIZE, scored.length);
+    const remaining = scored.length - shown;
+    showMoreBtn.textContent = `Show More (${remaining} more)`;
+    showMoreBtn.classList.toggle("hidden", remaining <= 0);
   }
+  showMoreBtn.addEventListener("click", showNextPage);
+  showNextPage();
 
   const addAnywayBtn = document.createElement("button");
   addAnywayBtn.className = "secondary";
@@ -140,8 +165,6 @@ function renderMatchResults(query, scored) {
   addAnywayBtn.style.marginTop = "6px";
   addAnywayBtn.addEventListener("click", () => addEntry(query, null));
   card.appendChild(addAnywayBtn);
-
-  resultsEl.appendChild(card);
 }
 
 async function addEntry(rawName, masterStudentId) {

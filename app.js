@@ -247,7 +247,15 @@ function matchStudentsByName(students, { firstQuery, lastQuery } = {}) {
       if (lastScore < LAST_NAME_MATCH_THRESHOLD) continue;
     }
     if (fq) {
-      firstScore = areNicknameEquivalent(fq, parts.first) ? 1 : similarity(fq, parts.first);
+      // A nickname match must never outrank (or tie) a literal exact match
+      // — otherwise every nickname-equivalent name (e.g. every "Jack" and
+      // "Jonathan" for a search of "John") ties with the real "John"s at a
+      // flat 1.0 and can crowd them out of a short results list purely by
+      // alphabetical luck. max(), not an unconditional override, so a
+      // decent existing similarity() score (e.g. "Jon" as a substring of
+      // "Jonathan") isn't needlessly capped down to the flat nickname bonus.
+      const direct = similarity(fq, parts.first);
+      firstScore = areNicknameEquivalent(fq, parts.first) ? Math.max(direct, 0.8) : direct;
       if (firstScore < FIRST_NAME_MATCH_THRESHOLD) continue;
     }
     const scores = [lastScore, firstScore].filter((s) => s !== null);

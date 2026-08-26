@@ -232,7 +232,7 @@ document.getElementById("student-search-form").addEventListener("submit", async 
   if (isClear) {
     renderStudentResult(resultEl, top.student);
   } else {
-    renderCandidatePicker(resultEl, queryLabel, scored.slice(0, 5));
+    renderCandidatePicker(resultEl, queryLabel, scored);
   }
 });
 
@@ -253,20 +253,45 @@ function renderStudentResult(container, student) {
   }
 }
 
+// Shows results a page at a time with a "Show More" button, rather than a
+// hard cap — a broad first-name search (e.g. "John", which also catches
+// nickname-equivalents like "Jack"/"Jonathan") can legitimately match many
+// students, and silently truncating to the first few risked hiding the
+// one the user actually wanted (found via a real report: dozens of
+// same-scoring matches, the desired student wasn't alphabetically early
+// enough to make a fixed top-5 cut).
+const CANDIDATE_PAGE_SIZE = 10;
+
 function renderCandidatePicker(container, query, scored) {
-  container.innerHTML = `<p>A few students match "${query}" — pick the right one:</p>`;
+  container.innerHTML = `<p>${scored.length} student${scored.length === 1 ? "" : "s"} match "${query}" — pick the right one:</p>`;
   const list = document.createElement("div");
   list.className = "roster-list";
   container.appendChild(list);
-  for (const { student } of scored) {
-    const item = document.createElement("div");
-    item.className = "roster-item";
-    item.style.cursor = "pointer";
-    item.innerHTML = `<img alt="${student.name}"><div class="name">${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</div>`;
-    loadCardImage(item.querySelector("img"), student);
-    item.addEventListener("click", () => renderStudentResult(container, student));
-    list.appendChild(item);
+
+  const showMoreBtn = document.createElement("button");
+  showMoreBtn.type = "button";
+  showMoreBtn.className = "secondary hidden";
+  showMoreBtn.style.marginTop = "10px";
+  container.appendChild(showMoreBtn);
+
+  let shown = 0;
+  function showNextPage() {
+    for (const { student } of scored.slice(shown, shown + CANDIDATE_PAGE_SIZE)) {
+      const item = document.createElement("div");
+      item.className = "roster-item";
+      item.style.cursor = "pointer";
+      item.innerHTML = `<img alt="${student.name}"><div class="name">${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</div>`;
+      loadCardImage(item.querySelector("img"), student);
+      item.addEventListener("click", () => renderStudentResult(container, student));
+      list.appendChild(item);
+    }
+    shown = Math.min(shown + CANDIDATE_PAGE_SIZE, scored.length);
+    const remaining = scored.length - shown;
+    showMoreBtn.textContent = `Show More (${remaining} more)`;
+    showMoreBtn.classList.toggle("hidden", remaining <= 0);
   }
+  showMoreBtn.addEventListener("click", showNextPage);
+  showNextPage();
 }
 
 setMode("login");
