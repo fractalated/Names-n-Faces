@@ -218,7 +218,16 @@ document.getElementById("student-search-form").addEventListener("submit", async 
 
   const top = scored[0];
   const second = scored[1];
-  const isClear = top.score >= CLEAR_MATCH_SCORE || !second || (top.score - second.score) >= CLEAR_MATCH_GAP;
+  // A high top score alone must NOT short-circuit past a close/tied second
+  // candidate — two students can both legitimately score a perfect 1.0
+  // (e.g. searching last name "Stamison" alone, when two students share
+  // that exact last name), and auto-picking one of them would silently
+  // hide the other. Only auto-pick when there's no real competitor: no
+  // second candidate, a comfortable score gap, or the top is a clearly
+  // stronger match than a meaningfully-weaker runner-up.
+  const isClear = !second
+    || (top.score - second.score) >= CLEAR_MATCH_GAP
+    || (top.score >= CLEAR_MATCH_SCORE && second.score < CLEAR_MATCH_SCORE);
 
   if (isClear) {
     renderStudentResult(resultEl, top.student);
