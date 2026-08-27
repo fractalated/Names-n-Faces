@@ -81,6 +81,26 @@ function matchLine(line, index) {
   return { rawLine: line, candidates: [], fallbackName: null };
 }
 
+// For a line that didn't exactly match any known master name, offer the
+// same fuzzy first/last matching deck-edit.js's "Add a Student" search uses
+// (matchStudentsByName in app.js) as a "did you mean" check before it's
+// left as a brand-new, unmatched entry — never auto-assigned, always
+// requires the teacher to click "This is them". This catches a real case
+// the exact-substring match above can't: a master record with MORE text
+// than the teacher's list has (e.g. a stored "Thomas, Noah Daniel" vs a
+// list entry of just "Thomas, Noah" — the roster line doesn't contain the
+// master name as a substring, so matchLine reports no match, even though
+// it's almost certainly the same student already in the database).
+const FUZZY_SUGGESTION_LIMIT = 5;
+
+function fuzzyMatchLine(fallbackName, masterStudents) {
+  if (!fallbackName) return [];
+  const { last, first } = splitStoredName(fallbackName);
+  return matchStudentsByName(masterStudents, { firstQuery: first, lastQuery: last })
+    .slice(0, FUZZY_SUGGESTION_LIMIT)
+    .map((s) => s.student);
+}
+
 document.getElementById("list-input").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -109,7 +129,10 @@ document.getElementById("list-input").addEventListener("change", async (e) => {
 
   const matches = lines
     .map((line) => matchLine(line, index))
-    .filter((m) => m.candidates.length > 0 || m.fallbackName);
+    .filter((m) => m.candidates.length > 0 || m.fallbackName)
+    .map((m) => m.candidates.length === 0
+      ? { ...m, fuzzyCandidates: fuzzyMatchLine(m.fallbackName, masterStudents) }
+      : m);
 
   statusEl.textContent = `Found ${matches.length} name(s) in the list.`;
   renderMatchReview(matches, label);
@@ -122,19 +145,26 @@ function renderMatchReview(matches, label) {
   const resolved = matches.map((m) => ({
     rawName: m.candidates.length > 0 ? m.candidates[0].name : (m.fallbackName || m.rawLine),
     candidates: m.candidates,
+    fuzzyCandidates: m.fuzzyCandidates || [],
     chosenId: m.candidates.length === 1 ? m.candidates[0].id : null,
   }));
 
   const autoCount = resolved.filter((r) => r.candidates.length === 1).length;
   const ambiguous = resolved.filter((r) => r.candidates.length > 1);
   const notFound = resolved.filter((r) => r.candidates.length === 0);
+  // Split "not found" into ones with a plausible existing student to check
+  // against vs. ones with genuinely nothing similar — only the former get
+  // the "did you mean" picker; the rest fall straight to the plain list.
+  const notFoundWithSuggestions = notFound.filter((r) => r.fuzzyCandidates.length > 0);
+  const notFoundNoSuggestions = notFound.filter((r) => r.fuzzyCandidates.length === 0);
 
   const summary = document.createElement("div");
   summary.className = "card";
   summary.innerHTML = `<h3>Review before creating "${label}"</h3>
     <p>${autoCount} student(s) matched automatically.` +
     (ambiguous.length ? ` ${ambiguous.length} need you to pick which student they mean.` : "") +
-    (notFound.length ? ` ${notFound.length} weren't found in the database.` : "") +
+    (notFoundWithSuggestions.length ? ` ${notFoundWithSuggestions.length} weren't matched automatically but may already be in the database under a slightly different name — check these before creating new entries for them.` : "") +
+    (notFoundNoSuggestions.length ? ` ${notFoundNoSuggestions.length} weren't found in the database at all.` : "") +
     `</p>`;
   container.appendChild(summary);
 
@@ -178,12 +208,48 @@ function renderMatchReview(matches, label) {
     container.appendChild(ambiguousCard);
   }
 
-  if (notFound.length) {
+  if (notFoundWithSuggestions.length) {
+    const suggestCard = document.createElement("div");
+    suggestCard.className = "card";
+    suggestCard.innerHTML = "<h3>Check these before adding as new</h3><p>Not matched automatically, but the database has student(s) with a similar name — confirm if one of these is actually the same person before it gets added as an unmatched entry.</p>";
+    notFoundWithSuggestions.forEach((r, ri) => {
+      const block = document.createElement("div");
+      block.className = "duplicate-group";
+      const options = r.fuzzyCandidates.map((c) => `
+        <label class="match-option">
+          <input type="radio" name="fuzzy-${ri}" value="${c.id}">
+          <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${c.name}">
+          <span>${c.name}${c.disambiguator ? ` (${c.disambiguator})` : ""}</span>
+        </label>
+      `).join("") + `
+        <label class="match-option">
+          <input type="radio" name="fuzzy-${ri}" value="" checked>
+          <span>None of these — add "${r.rawName}" as a new, unmatched entry</span>
+        </label>
+      `;
+      block.innerHTML = `<h4>${r.rawName}</h4><div class="match-options">${options}</div>`;
+      suggestCard.appendChild(block);
+
+      block.querySelectorAll("img").forEach((img) => {
+        const photoUrl = img.dataset.photo;
+        if (photoUrl) fetchPhotoObjectUrl(photoUrl).then((url) => { img.src = url; });
+        else img.src = PLACEHOLDER_SILHOUETTE_SVG;
+      });
+      block.querySelectorAll('input[type="radio"]').forEach((radio) => {
+        radio.addEventListener("change", () => {
+          r.chosenId = radio.value || null;
+        });
+      });
+    });
+    container.appendChild(suggestCard);
+  }
+
+  if (notFoundNoSuggestions.length) {
     const notFoundCard = document.createElement("div");
     notFoundCard.className = "card";
     notFoundCard.innerHTML = `<h3>Not found in the database</h3>
       <p class="warn">These will still be added to the deck (shown with a placeholder photo) — double check the spelling, or ask the admin to add them.</p>
-      <ul>${notFound.map((r) => `<li>${r.rawName}</li>`).join("")}</ul>`;
+      <ul>${notFoundNoSuggestions.map((r) => `<li>${r.rawName}</li>`).join("")}</ul>`;
     container.appendChild(notFoundCard);
   }
 

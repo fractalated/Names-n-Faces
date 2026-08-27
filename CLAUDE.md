@@ -151,13 +151,38 @@ exception for hand-typing a single name (see below):
   those specific candidates (photo + disambiguator) as a pick-one choice —
   they cannot invent a new resolution, only choose among what the admin
   already set up.
+  - **A line with zero exact-substring matches still gets a fuzzy "did you
+    mean" check** before it's left as a plain unmatched entry
+    (`fuzzyMatchLine()` in `deck-builder.js`, reusing `matchStudentsByName`
+    from `app.js`) — added after a real case slipped through: a teacher's
+    list had "Thomas, Noah" and the database already had "Thomas, Noah
+    Daniel", but the exact-substring check requires the *line* to contain
+    the *master name* as a substring, so a master record with **more** text
+    than the list entry (an extra middle name) can never match that way, no
+    matter how obviously it's the same person. This is a genuinely
+    different failure mode from the two-word-first-name risk above (which
+    is about a *line* having extra trailing text) and isn't fixable by
+    loosening the substring check itself. The fix is scoped, not a general
+    loosening of bulk matching: only lines with zero exact matches get a
+    fuzzy pass, suggestions are capped at `FUZZY_SUGGESTION_LIMIT` (5),
+    and — critically — nothing is ever auto-bound from it. Every suggested
+    line renders as a radio pick between the candidate(s) and an explicit,
+    **pre-selected-by-default** "None of these — add as new, unmatched"
+    option, so silently doing nothing (not clicking anything) reproduces
+    the exact old behavior. This is the same "no fuzzy matching for
+    anything automated" invariant as everywhere else in this file — the
+    fuzzy step only ever *surfaces a question for a human*, it never
+    resolves one on its own, so it doesn't violate the exact-match
+    guarantee duplicate resolution depends on.
 - **Deliberate, scoped exception — hand-typing a name**: `deck-edit.js`'s
   "Add a Student" search and the home-page "Find a Student" search
   (`index.html`) both use fuzzy matching (`matchStudentsByName()` in
   `app.js`) to rank candidates for a human-typed query — unlike the bulk
   paths above, there's no batch to reason about consistently, and the user
   explicitly wants "closest match, confirm it" rather than "exact or
-  nothing."
+  nothing." (The deck-builder "did you mean" step above uses the same
+  underlying function for the same reason, just triggered automatically
+  off an unmatched list line instead of a typed query.)
   - Both pages take **separate First Name / Last Name fields**, either
     optional but at least one required — not one combined text box.
     `matchStudentsByName` scores each query against its own name component
@@ -211,11 +236,15 @@ exception for hand-typing a single name (see below):
     legitimately match many students, and silently truncating the list risks
     hiding the one the user actually wanted, which is exactly what the fixed
     5-cap did before this.
-- No fuzzy matching for anything *automated/bulk*, by design. A name that
-  doesn't match at all in a bulk path (typo, different format, not yet
-  enrolled) is an expected "not found" case surfaced to the teacher, not a
-  bug to later "fix" with fuzzy logic — that would silently violate the
-  exact-match design duplicate resolution depends on.
+- No fuzzy matching *auto-binds* anything in a bulk path, by design — the
+  deck-builder "did you mean" step above is the one place bulk matching
+  uses fuzzy scoring at all, and it only ever proposes, defaulting to
+  "not found" unless a human clicks a specific candidate. A name that
+  still isn't matched (typo too large to score, different format, not yet
+  enrolled, or the teacher declines every suggestion) is an expected "not
+  found" case surfaced to the teacher, never something silently "fixed" by
+  auto-assigning a guess — that would violate the exact-match guarantee
+  duplicate resolution depends on.
 - `normalizeNameKey`/`levenshtein`/`similarity`/`splitStoredName`/
   `matchStudentsByName`/`cropToSquare` all live in `app.js` now, shared by
   every page that needs them (`admin.js`, `deck-builder.js`, `deck-edit.js`,
