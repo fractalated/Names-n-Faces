@@ -21,11 +21,19 @@ exception to "teachers never write to the shared database."
   at `https://fractalated.github.io/Names-n-Faces/`.
   - `index.html` — login + signup + home page (grid of the logged-in user's
     own decks, a "Find a Student" search box, plus "+ Create New Deck")
-  - `deck.html` — flashcard quiz for one deck (`?d=<deckId>`)
+  - `missing-photos.html` — browses **every** master student currently
+    missing a photo (not scoped to any one deck) with an "Add Photo"
+    control on each; linked prominently, unconditionally (not admin-gated),
+    from the home page nav — the main discovery surface for the non-admin
+    photo-upload capability (see below). An item removes itself from the
+    list the moment its photo is added.
+  - `deck.html` — flashcard quiz for one deck (`?d=<deckId>`); also offers
+    "Add Photo" inline under a card that has none, since this is the
+    highest-traffic page in the app and the most natural moment to notice
+    a gap
   - `deck-view.html` — read-only "View All" study sheet for one deck (every
     card in a grid at once, no shuffle/reveal) — linked from each deck tile
-    and from `deck.html`; also where a teacher fills in a missing photo for
-    one of their deck's students (see below)
+    and from `deck.html`; also offers "Add Photo" per missing-photo card
   - `deck-edit.html` / `deck-edit.js` — rename a deck, add a student by
     fuzzy name search (own "Add a Student" flow — see Duplicate names/
     matching below), multi-select removal of current students, delete the
@@ -228,14 +236,28 @@ enforced **server-side**:
    accepted by this route at all.
 3. The client-side entry points only ever offer this button when a card
    already resolves to a real `master_student_id` with `hasPhoto:false`
-   (`deck-view.html`'s study grid, and a "not found" home-page search result
-   has no id to attach to and correctly gets no button) — but the *real*
-   guarantee is server-side constraint #1, not the UI gating, same as every
-   other admin-boundary check in this app.
+   (a "not found" home-page search result, or a deck entry that never
+   matched anyone, has no id to attach to and correctly gets no button) —
+   but the *real* guarantee is server-side constraint #1, not the UI
+   gating, same as every other admin-boundary check in this app.
 
 Uses the same `cropToSquare`/upload pattern as admin's own photo tools
-(`uploadMissingPhoto()` in `app.js`), and the same placeholder-silhouette
-fallback everywhere else if the upload never happens.
+(`uploadMissingPhoto()`/`renderAddPhotoControl()` in `app.js`), and the
+same placeholder-silhouette fallback everywhere else if the upload never
+happens.
+
+**Discoverability matters as much as the capability itself** — the feature
+originally shipped surfaced only in `deck-view.html` and the home-page
+search, both of which require already knowing which specific student to
+look for or which deck they're in. In practice this meant a teacher had no
+way to find it at all unless they stumbled into exactly the right context,
+which defeats the point of making it available to everyone. Fixed by
+adding two more surfaces: `missing-photos.html` (browse the *entire*
+missing-photo list, no prior knowledge needed) and `deck.html`'s quiz view
+(the highest-traffic page, and the moment a gap is most naturally noticed).
+When adding a new capability meant for casual/incidental use, plan its
+entry points as deliberately as the capability itself — a correct feature
+nobody can find is equivalent to no feature.
 
 ## Auth model
 

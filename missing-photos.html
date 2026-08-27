@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Missing Photos — Names & Faces</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="page">
+  <div class="topbar">
+    <div class="topbar-title">
+      <picture>
+        <source srcset="assets/logo-white.png" media="(prefers-color-scheme: dark)">
+        <img src="assets/logo-purple.png" alt="Lutheran High School" class="brand-mark">
+      </picture>
+      <div>
+        <h1>Missing Photos</h1>
+        <p class="subtitle" id="subtitle">Loading…</p>
+      </div>
+    </div>
+    <div class="topbar-nav"><a href="index.html">&larr; Home</a></div>
+  </div>
+
+  <div id="empty-msg" class="card hidden">Every student in the database has a photo. Nice!</div>
+  <div class="roster-list" id="missing-grid"></div>
+</div>
+
+<script src="app.js"></script>
+<script>
+requireLogin();
+
+function updateSubtitle(count) {
+  document.getElementById("subtitle").textContent =
+    `${count} student${count === 1 ? "" : "s"} in the shared database with no photo on file — anyone can add one.`;
+}
+
+async function init() {
+  const students = await loadMasterStudents();
+  const missing = students.filter((s) => !s.hasPhoto);
+  updateSubtitle(missing.length);
+  if (missing.length === 0) {
+    document.getElementById("empty-msg").classList.remove("hidden");
+    return;
+  }
+
+  const grid = document.getElementById("missing-grid");
+  for (const student of missing) {
+    const item = document.createElement("div");
+    item.className = "roster-item";
+    item.innerHTML = `<img alt="${student.name}"><div class="name">${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</div>`;
+    loadCardImage(item.querySelector("img"), student);
+    renderAddPhotoControl(item, student.id, () => {
+      loadCardImage(item.querySelector("img"), { hasPhoto: true, photoUrl: `/api/master/photo/${student.id}` });
+      item.remove();
+      const remaining = document.querySelectorAll("#missing-grid .roster-item").length;
+      updateSubtitle(remaining);
+      if (remaining === 0) document.getElementById("empty-msg").classList.remove("hidden");
+    });
+    grid.appendChild(item);
+  }
+}
+
+init();
+</script>
+</body>
+</html>

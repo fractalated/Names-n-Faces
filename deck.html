@@ -31,6 +31,7 @@
     <div class="progress" id="progress"></div>
     <div class="frame"><img id="photo" alt="Student photo"></div>
     <div class="name" id="name-display"></div>
+    <div id="missing-photo-container"></div>
     <div class="actions">
       <button class="secondary" id="reveal-btn">Reveal Name</button>
       <button id="next-btn">Next &rarr;</button>
@@ -65,7 +66,21 @@ async function showCard() {
   document.getElementById("progress").textContent = `Card ${index + 1} of ${cards.length}`;
   document.getElementById("name-display").textContent = "";
   document.getElementById("photo").src = "";
+  const missingPhotoContainer = document.getElementById("missing-photo-container");
+  missingPhotoContainer.innerHTML = "";
   await loadCardImage(document.getElementById("photo"), card);
+  // Only offered when the card is actually bound to a master student record
+  // — a name that never matched anyone has nothing to attach a photo to.
+  // This is the highest-traffic page in the app (quizzing), so it's the
+  // most natural place to notice and fix a missing photo — previously this
+  // was only offered on the "View All" page and student search, both of
+  // which require already knowing which student to look for.
+  if (!card.hasPhoto && card.masterStudentId) {
+    renderAddPhotoControl(missingPhotoContainer, card.masterStudentId, () => {
+      card.hasPhoto = true;
+      loadCardImage(document.getElementById("photo"), { hasPhoto: true, photoUrl: `/api/master/photo/${card.masterStudentId}` });
+    });
+  }
 }
 
 document.getElementById("reveal-btn").addEventListener("click", () => {
