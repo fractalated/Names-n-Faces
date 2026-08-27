@@ -37,7 +37,9 @@ exception to "teachers never write to the shared database."
   - `deck-edit.html` / `deck-edit.js` — rename a deck, add a student by
     fuzzy name search (own "Add a Student" flow — see Duplicate names/
     matching below), multi-select removal of current students, delete the
-    whole deck
+    whole deck; also offers "Add Photo" per missing-photo card in the
+    current-students list — a deck's own management page is a natural
+    place to notice a gap while scanning the whole roster
   - `deck-builder.html` / `deck-builder.js` — upload a name list, name the
     deck; matches names against the master database (all users)
   - `admin.html` / `admin.js` — **admin-only**: import/replace the whole
@@ -252,9 +254,11 @@ search, both of which require already knowing which specific student to
 look for or which deck they're in. In practice this meant a teacher had no
 way to find it at all unless they stumbled into exactly the right context,
 which defeats the point of making it available to everyone. Fixed by
-adding two more surfaces: `missing-photos.html` (browse the *entire*
-missing-photo list, no prior knowledge needed) and `deck.html`'s quiz view
-(the highest-traffic page, and the moment a gap is most naturally noticed).
+adding three more surfaces: `missing-photos.html` (browse the *entire*
+missing-photo list, no prior knowledge needed), `deck.html`'s quiz view
+(the highest-traffic page, and the moment a gap is most naturally noticed),
+and `deck-edit.html`'s current-students list (a deck's own management page,
+where a teacher is already scanning every student in the deck at once).
 When adding a new capability meant for casual/incidental use, plan its
 entry points as deliberately as the capability itself — a correct feature
 nobody can find is equivalent to no feature.

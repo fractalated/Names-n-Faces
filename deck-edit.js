@@ -54,19 +54,36 @@ function renderCurrentList() {
   }
   list.innerHTML = "";
   for (const card of currentCards) {
-    const item = document.createElement("label");
-    item.className = "roster-item roster-item-selectable";
-    item.innerHTML = `
+    // A plain wrapper div, not a <label>, so it stays one grid cell in the
+    // roster-list grid: the checkbox/select behavior lives on an inner
+    // <label>, leaving room to append the Add Photo control (a button +
+    // file input) as a sibling inside the same cell without it either
+    // triggering the checkbox or landing in its own misaligned grid cell.
+    const item = document.createElement("div");
+    item.className = "roster-item";
+    const selectLabel = document.createElement("label");
+    selectLabel.className = "roster-item-selectable";
+    selectLabel.innerHTML = `
       <input type="checkbox">
       <img alt="${card.name}">
       <div class="name">${card.name}${card.disambiguator ? ` (${card.disambiguator})` : ""}</div>
     `;
-    loadCardImage(item.querySelector("img"), card);
-    item.querySelector("input").addEventListener("change", (e) => {
+    item.appendChild(selectLabel);
+    loadCardImage(selectLabel.querySelector("img"), card);
+    selectLabel.querySelector("input").addEventListener("change", (e) => {
       if (e.target.checked) selected.add(card.id);
       else selected.delete(card.id);
       updateRemoveButton();
     });
+    // Deck editing is a natural place to notice a gap while scanning the
+    // whole roster — same masterStudentId-gated Add Photo control as
+    // deck.html/deck-view.html/missing-photos.html.
+    if (!card.hasPhoto && card.masterStudentId) {
+      renderAddPhotoControl(item, card.masterStudentId, () => {
+        card.hasPhoto = true;
+        loadCardImage(selectLabel.querySelector("img"), { hasPhoto: true, photoUrl: `/api/master/photo/${card.masterStudentId}` });
+      });
+    }
     list.appendChild(item);
   }
 }
