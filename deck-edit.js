@@ -6,6 +6,10 @@ const deckId = params.get("d");
 let currentCards = [];
 let currentLabel = "";
 const selected = new Set();
+// entryId -> {item, selectLabel} — lets "Check Database for Updates" attach
+// a suggestion box to the right roster cell without a full re-render (which
+// would wipe out any other suggestion boxes still awaiting review).
+let itemElsById = new Map();
 
 // normalizeNameKey/levenshtein/similarity and loadMasterStudents() now live
 // in app.js, shared with deck-builder.js and the home-page search.
@@ -48,6 +52,9 @@ function renderCurrentList() {
   const list = document.getElementById("current-list");
   selected.clear();
   updateRemoveButton();
+  itemElsById = new Map();
+  document.getElementById("check-updates-results").innerHTML = "";
+  document.getElementById("check-updates-status").textContent = "";
   if (currentCards.length === 0) {
     list.innerHTML = "<p>No students in this deck yet.</p>";
     return;
@@ -84,7 +91,118 @@ function renderCurrentList() {
         loadCardImage(selectLabel.querySelector("img"), { hasPhoto: true, photoUrl: `/api/master/photo/${card.masterStudentId}` });
       });
     }
+    itemElsById.set(card.id, { item, selectLabel });
     list.appendChild(item);
+  }
+}
+
+// A deck entry's master_student_id is set once, at deck-build time, and
+// never touched again — so it goes stale in two ways that never self-heal:
+// a line the deck-builder's matching missed back then, or a master row that
+// was later deleted/replaced (an annual re-import reissues fresh ids to
+// everyone). Either way the card shows here with no masterStudentId and no
+// Add Photo control, and it won't show up on missing-photos.html either,
+// since that page only lists rows that currently exist in master_students.
+// This re-runs the same "did you mean" fuzzy check the deck-builder itself
+// uses (fuzzyMatchLine in app.js) against the CURRENT roster, for every
+// entry still missing a masterStudentId — never auto-binding, exactly like
+// every other fuzzy-match surface in this app; the teacher always confirms.
+document.getElementById("check-updates-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("check-updates-btn");
+  const statusEl = document.getElementById("check-updates-status");
+  btn.disabled = true;
+  statusEl.textContent = "Checking against the database…";
+  const students = await loadMasterStudents();
+  let suggested = 0, stillUnmatched = 0;
+  for (const card of currentCards) {
+    if (card.masterStudentId) continue;
+    const candidates = fuzzyMatchLine(card.name, students);
+    if (candidates.length === 0) {
+      stillUnmatched++;
+      continue;
+    }
+    suggested++;
+    renderSuggestion(card, candidates);
+  }
+  statusEl.textContent = suggested
+    ? `Found ${suggested} possible match${suggested === 1 ? "" : "es"} to review below. ${stillUnmatched} student(s) still not found in the database.`
+    : `No updates found. ${stillUnmatched} student(s) still not found in the database.`;
+  btn.disabled = false;
+});
+
+// Rendered into #check-updates-results (a normal-width card area above the
+// narrow roster-item photo grid), not inline inside the roster cell itself
+// — a roster-item is only ~130px wide (see .roster-list in style.css), and
+// a full match-row (photo + name + button) doesn't fit: an earlier version
+// appended it there directly and it overflowed under the next grid cell,
+// which silently swallowed clicks on the button sitting underneath it.
+function renderSuggestion(card, candidates) {
+  const results = document.getElementById("check-updates-results");
+  const old = results.querySelector(`[data-entry-id="${card.id}"]`);
+  if (old) old.remove();
+
+  const box = document.createElement("div");
+  box.className = "card";
+  box.dataset.entryId = card.id;
+  const label = document.createElement("p");
+  label.style.margin = "0 0 8px";
+  label.innerHTML = `Possible match for <strong>${card.name}</strong> — is this the same student?`;
+  box.appendChild(label);
+
+  for (const student of candidates) {
+    const row = document.createElement("div");
+    row.className = "match-row";
+    row.innerHTML = `<img alt="${student.name}"><span>${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</span>`;
+    const img = row.querySelector("img");
+    if (student.hasPhoto) fetchPhotoObjectUrl(student.photoUrl).then((url) => { img.src = url; });
+    else img.src = PLACEHOLDER_SILHOUETTE_SVG;
+    const confirmBtn = document.createElement("button");
+    confirmBtn.textContent = "This is them";
+    confirmBtn.addEventListener("click", () => bindEntry(card, student, box));
+    row.appendChild(confirmBtn);
+    box.appendChild(row);
+  }
+
+  const dismissBtn = document.createElement("button");
+  dismissBtn.type = "button";
+  dismissBtn.className = "secondary";
+  dismissBtn.textContent = "Not a match";
+  dismissBtn.addEventListener("click", () => box.remove());
+  box.appendChild(dismissBtn);
+
+  results.appendChild(box);
+}
+
+async function bindEntry(card, student, box) {
+  const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}/entries/${encodeURIComponent(card.id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ masterStudentId: student.id }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || "Could not update this student");
+    return;
+  }
+  card.name = data.name;
+  card.disambiguator = data.disambiguator;
+  card.hasPhoto = data.hasPhoto;
+  card.photoUrl = data.photoUrl;
+  card.masterStudentId = data.masterStudentId;
+  box.remove();
+
+  const entry = itemElsById.get(card.id);
+  if (!entry) return;
+  const img = entry.selectLabel.querySelector("img");
+  img.alt = card.name;
+  loadCardImage(img, card);
+  entry.selectLabel.querySelector(".name").textContent =
+    card.name + (card.disambiguator ? ` (${card.disambiguator})` : "");
+  if (!card.hasPhoto && card.masterStudentId) {
+    renderAddPhotoControl(entry.item, card.masterStudentId, () => {
+      card.hasPhoto = true;
+      loadCardImage(img, { hasPhoto: true, photoUrl: `/api/master/photo/${card.masterStudentId}` });
+    });
   }
 }
 

@@ -81,25 +81,14 @@ function matchLine(line, index) {
   return { rawLine: line, candidates: [], fallbackName: null };
 }
 
-// For a line that didn't exactly match any known master name, offer the
-// same fuzzy first/last matching deck-edit.js's "Add a Student" search uses
-// (matchStudentsByName in app.js) as a "did you mean" check before it's
-// left as a brand-new, unmatched entry — never auto-assigned, always
-// requires the teacher to click "This is them". This catches a real case
-// the exact-substring match above can't: a master record with MORE text
-// than the teacher's list has (e.g. a stored "Thomas, Noah Daniel" vs a
-// list entry of just "Thomas, Noah" — the roster line doesn't contain the
-// master name as a substring, so matchLine reports no match, even though
-// it's almost certainly the same student already in the database).
-const FUZZY_SUGGESTION_LIMIT = 5;
-
-function fuzzyMatchLine(fallbackName, masterStudents) {
-  if (!fallbackName) return [];
-  const { last, first } = splitStoredName(fallbackName);
-  return matchStudentsByName(masterStudents, { firstQuery: first, lastQuery: last })
-    .slice(0, FUZZY_SUGGESTION_LIMIT)
-    .map((s) => s.student);
-}
+// fuzzyMatchLine (a "did you mean" check for a line that didn't exactly
+// match any known master name) now lives in app.js, shared with
+// deck-edit.js's "Check Database for Updates". This catches a real case the
+// exact-substring match above can't: a master record with MORE text than
+// the teacher's list has (e.g. a stored "Thomas, Noah Daniel" vs a list
+// entry of just "Thomas, Noah" — the roster line doesn't contain the master
+// name as a substring, so matchLine reports no match, even though it's
+// almost certainly the same student already in the database).
 
 document.getElementById("list-input").addEventListener("change", async (e) => {
   const file = e.target.files[0];

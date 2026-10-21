@@ -234,6 +234,8 @@ input[type="text"], input[type="password"], input[type="email"], select {
 .roster-item { text-align: center; font-family: var(--sans); }
 .roster-item img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--border); background: var(--cultured); }
 .roster-item .name { font-size: 0.85rem; margin: 6px 0 4px; }
+/* "In your 9th period" line under a home-page search result. */
+.student-decks { font-family: var(--sans); font-weight: 600; margin: 10px 0 0; }
 
 .import-page-status { display: flex; align-items: center; gap: 10px; padding: 6px 0; color: var(--muted); font-family: var(--sans); font-size: 0.9rem; }
 .warn { color: #8a5a1f; font-family: var(--sans); font-size: 0.85rem; }

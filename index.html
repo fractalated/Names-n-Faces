@@ -252,6 +252,66 @@ function renderStudentResult(container, student) {
       loadCardImage(card.querySelector("img"), { hasPhoto: true, photoUrl: `/api/master/photo/${student.id}` });
     });
   }
+  const membership = document.createElement("p");
+  membership.className = "student-decks";
+  membership.textContent = "Checking your decks…";
+  container.appendChild(membership);
+  renderDeckMembership(membership, student.id);
+}
+
+// "In your 9th period" — which of the user's own decks contain this
+// student, phrased from the deck names. Teachers typically name decks after
+// class periods, so a label with a recognizable period/hour number becomes
+// "9th period"; anything else is quoted as-is ("your "Gen Chem" deck").
+async function renderDeckMembership(el, studentId) {
+  try {
+    const res = await apiFetch(`/api/master/students/${encodeURIComponent(studentId)}/decks`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    if (data.decks.length === 0) {
+      el.textContent = "You don't have this student in a class.";
+      return;
+    }
+    // Period-numbered decks first, in period order; anything else after.
+    const described = data.decks.map((d) => describeDeckLabel(d.label));
+    described.sort((a, b) => (a.period ?? Infinity) - (b.period ?? Infinity));
+    el.textContent = `In your ${joinWithAnd(described.map((d) => d.text))}.`;
+  } catch {
+    el.textContent = "";
+  }
+}
+
+function ordinal(n) {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  return n + ({ 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th");
+}
+
+// Recognizes "9th Period", "Period 9", "Per. 9", "P9", "9th Hour", "Hour 3",
+// "Period 1A" (block-schedule letter kept). Returns e.g. "9th period" /
+// "period 1A" / "3rd hour" (plus the period number, for sorting), or the
+// label quoted as a deck when no period number can be read from it.
+const PERIOD_WORDS = "period|per\\.?|pd\\.?|hour|hr\\.?";
+const NUMBER_FIRST_RE = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s*(${PERIOD_WORDS})(?![a-z])`, "i");
+const WORD_FIRST_RE = new RegExp(`(?:^|[^a-z])(${PERIOD_WORDS}|p)\\s*#?\\s*(\\d{1,2})([a-d])?(?![a-z0-9])`, "i");
+
+function describeDeckLabel(label) {
+  const unitWord = (w) => (/^h/i.test(w) ? "hour" : "period");
+  let m = label.match(NUMBER_FIRST_RE);
+  if (m) return { text: `${ordinal(Number(m[1]))} ${unitWord(m[2])}`, period: Number(m[1]) };
+  m = label.match(WORD_FIRST_RE);
+  if (m) {
+    const unit = unitWord(m[1]);
+    const text = m[3] ? `${unit} ${m[2]}${m[3].toUpperCase()}` : `${ordinal(Number(m[2]))} ${unit}`;
+    return { text, period: Number(m[2]) };
+  }
+  return { text: `"${label}" deck`, period: null };
+}
+
+function joinWithAnd(parts) {
+  if (parts.length <= 1) return parts.join("");
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
 }
 
 // Shows results a page at a time with a "Show More" button, rather than a

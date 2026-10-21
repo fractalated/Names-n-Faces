@@ -20,7 +20,10 @@ exception to "teachers never write to the shared database."
 - **Frontend**: static HTML/CSS/JS at the repo root, served by GitHub Pages
   at `https://fractalated.github.io/Names-n-Faces/`.
   - `index.html` — login + signup + home page (grid of the logged-in user's
-    own decks, a "Find a Student" search box, plus "+ Create New Deck")
+    own decks, a "Find a Student" search box, plus "+ Create New Deck");
+    a search result also says which of the user's own decks contain that
+    student ("In your 9th period" — see "Find a Student: deck membership"
+    below)
   - `missing-photos.html` — browses **every** master student currently
     missing a photo (not scoped to any one deck) with an "Add Photo"
     control on each; linked prominently, unconditionally (not admin-gated),
@@ -39,7 +42,8 @@ exception to "teachers never write to the shared database."
     matching below), multi-select removal of current students, delete the
     whole deck; also offers "Add Photo" per missing-photo card in the
     current-students list — a deck's own management page is a natural
-    place to notice a gap while scanning the whole roster
+    place to notice a gap while scanning the whole roster; and "Check
+    Database for Updates" (re-link stale/unmatched entries — see below)
   - `deck-builder.html` / `deck-builder.js` — upload a name list, name the
     deck; matches names against the master database (all users)
   - `admin.html` / `admin.js` — **admin-only**: import/replace the whole
@@ -153,7 +157,7 @@ exception for hand-typing a single name (see below):
   already set up.
   - **A line with zero exact-substring matches still gets a fuzzy "did you
     mean" check** before it's left as a plain unmatched entry
-    (`fuzzyMatchLine()` in `deck-builder.js`, reusing `matchStudentsByName`
+    (`fuzzyMatchLine()` in `app.js`, reusing `matchStudentsByName`
     from `app.js`) — added after a real case slipped through: a teacher's
     list had "Thomas, Noah" and the database already had "Thomas, Noah
     Daniel", but the exact-substring check requires the *line* to contain
@@ -246,7 +250,7 @@ exception for hand-typing a single name (see below):
   auto-assigning a guess — that would violate the exact-match guarantee
   duplicate resolution depends on.
 - `normalizeNameKey`/`levenshtein`/`similarity`/`splitStoredName`/
-  `matchStudentsByName`/`cropToSquare` all live in `app.js` now, shared by
+  `matchStudentsByName`/`fuzzyMatchLine`/`cropToSquare` all live in `app.js` now, shared by
   every page that needs them (`admin.js`, `deck-builder.js`, `deck-edit.js`,
   `index.html`) — don't add a second copy to a page-specific file; this
   list used to have three independent copies of `normalizeNameKey` before
@@ -439,6 +443,48 @@ a bespoke bulk-delete route), a "type a name, confirm the match" add flow
 `DELETE /api/decks/:id/entries/:entryId` (remove one entry) both re-verify
 deck ownership (`WHERE id = ? AND user_id = ?`) before touching anything,
 same pattern as every other per-user deck route.
+
+### Check Database for Updates (re-linking stale entries)
+
+A deck entry's `master_student_id` is set once, at build time, and never
+self-heals: a line the deck-builder couldn't match back then, or an entry
+whose master row was since deleted/replaced (an annual `mode:"replace"`
+re-import reissues every id), shows with no `masterStudentId` — so no Add
+Photo button, and it won't appear on `missing-photos.html` either.
+`deck-edit.html`'s "Check Database for Updates" re-runs `fuzzyMatchLine()`
+against the *current* master list for every such entry and lists
+suggestions in `#check-updates-results` (a full-width area above the photo
+grid — an earlier version put them inside the ~130px roster cell, where
+they overflowed and swallowed clicks on the next cell). As with every fuzzy
+surface, nothing auto-binds: the teacher clicks "This is them" or "Not a
+match". Confirming calls `PATCH /api/decks/:id/entries/:entryId`
+(`{masterStudentId}`), which re-verifies deck ownership, only binds to a
+master row that exists, and never touches `raw_name_text`.
+
+## Find a Student: deck membership
+
+The home-page search result shows which of the user's **own** decks
+contain the student, phrased from deck names — teachers name decks after
+class periods, so `describeDeckLabel()` in `index.html` turns "9th Period"/
+"Period 9"/"Per. 9"/"P9"/"3rd Hour"/"Period 1A" into "9th period"/"3rd
+hour"/"period 1A" and quotes anything else (`In your "AP Chem" deck`),
+period-numbered ones sorted first. No match → "You don't have this student
+in a class."
+
+Backed by `GET /api/master/students/:id/decks`, scoped by `user_id` (a
+teacher never learns about anyone else's decks). It matches entries bound
+to the student's id, plus — read-only fallback — entries **not** bound to
+any current master row whose `raw_name_text` exactly equals the student's
+`name_key`, but only if no other master row shares that `name_key` (never
+guesses between a duplicate-name pair). That fallback keeps the answer
+right for decks gone stale after an annual replace, without silently
+rebinding anything; "Check Database for Updates" is the real fix.
+
+**Grade level is not shown** — no source file has it: the whole-school
+roster PDF (`All Students Roster (Service).pdf`) has only names and photos,
+and the Chapel roster's groups are by advisor, not grade. `master_students`
+has no grade column. Adding grade needs a new data source (e.g. a SIS
+report export with a Grade Level column) plus a migration.
 
 ## Nav styling
 

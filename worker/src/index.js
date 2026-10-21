@@ -503,6 +503,39 @@ export default {
       return json({ label: deck.label, cards }, 200, env);
     }
 
+    // Which of the logged-in user's own decks contain this master student —
+    // the home-page "Find a Student" result uses it to say "In your 9th
+    // period" (or "You don't have this student in a class"). Scoped by
+    // user_id like every other deck route: a teacher only ever learns about
+    // their own decks, never anyone else's.
+    //
+    // Primarily matched by the entry's bound master_student_id. As a
+    // fallback, an entry that is NOT bound to any current master row (never
+    // matched, or its row was replaced by an annual re-import) also counts
+    // when its raw_name_text is exactly this student's name_key — but only
+    // when no other master row shares that name_key, so a duplicate-name
+    // pair is never guessed between. Read-only display, never a rebind;
+    // deck-edit's "Check Database for Updates" is what actually fixes the
+    // stale entry.
+    const studentDecksMatch = pathname.match(/^\/api\/master\/students\/([\w-]+)\/decks$/);
+    if (studentDecksMatch && request.method === "GET") {
+      const ms = await env.DB.prepare(
+        "SELECT id, name_key, (SELECT COUNT(*) FROM master_students s2 WHERE s2.name_key = master_students.name_key) AS same_name_count FROM master_students WHERE id = ?"
+      ).bind(studentDecksMatch[1]).first();
+      if (!ms) return json({ error: "Student not found" }, 404, env);
+      const { results } = await env.DB.prepare(`
+        SELECT DISTINCT d.id, d.label
+        FROM decks d
+        JOIN deck_entries de ON de.deck_id = d.id
+        LEFT JOIN master_students cur ON cur.id = de.master_student_id
+        WHERE d.user_id = ?
+          AND (de.master_student_id = ?
+               OR (cur.id IS NULL AND ? = 1 AND lower(trim(de.raw_name_text)) = ?))
+        ORDER BY d.label
+      `).bind(auth.userId, ms.id, ms.same_name_count, ms.name_key).all();
+      return json({ decks: results.map((d) => ({ id: d.id, label: d.label })) }, 200, env);
+    }
+
     const deckEntriesMatch = pathname.match(/^\/api\/decks\/([\w-]+)\/entries$/);
     if (deckEntriesMatch && request.method === "POST") {
       const deck = await env.DB.prepare(
@@ -543,6 +576,34 @@ export default {
         "DELETE FROM deck_entries WHERE id = ? AND deck_id = ?"
       ).bind(deckEntryMatch[2], deckEntryMatch[1]).run();
       return json({ ok: true }, 200, env);
+    }
+
+    // Rebinds an existing entry to a master_students row found by a later
+    // re-check (deck-edit.js's "Check Database for Updates") — the entry's
+    // master_student_id was NULL (never matched at deck-build time, or the
+    // master row it pointed at was since deleted/replaced), and the user has
+    // now confirmed which current master row it actually is. Only ever binds
+    // to a row that exists; never creates one or touches raw_name_text.
+    if (deckEntryMatch && request.method === "PATCH") {
+      const deck = await env.DB.prepare(
+        "SELECT id FROM decks WHERE id = ? AND user_id = ?"
+      ).bind(deckEntryMatch[1], auth.userId).first();
+      if (!deck) return json({ error: "Not found" }, 404, env);
+      const { masterStudentId } = await request.json().catch(() => ({}));
+      if (!masterStudentId) return json({ error: "masterStudentId is required" }, 400, env);
+      const ms = await env.DB.prepare(
+        "SELECT id, name, disambiguator, photo_key IS NOT NULL AS has_photo FROM master_students WHERE id = ?"
+      ).bind(masterStudentId).first();
+      if (!ms) return json({ error: "Student not found" }, 404, env);
+      const result = await env.DB.prepare(
+        "UPDATE deck_entries SET master_student_id = ? WHERE id = ? AND deck_id = ?"
+      ).bind(ms.id, deckEntryMatch[2], deckEntryMatch[1]).run();
+      if (result.meta.changes === 0) return json({ error: "Not found" }, 404, env);
+      return json({
+        id: deckEntryMatch[2], name: ms.name, disambiguator: ms.disambiguator || null,
+        hasPhoto: !!ms.has_photo, photoUrl: ms.has_photo ? `/api/master/photo/${ms.id}` : null,
+        masterStudentId: ms.id,
+      }, 200, env);
     }
 
     const deckMatch = pathname.match(/^\/api\/decks\/([\w-]+)$/);

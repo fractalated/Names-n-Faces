@@ -266,6 +266,22 @@ function matchStudentsByName(students, { firstQuery, lastQuery } = {}) {
   return results;
 }
 
+// For a name that didn't exactly match any known master name, offer the same
+// fuzzy first/last matching deck-edit.js's "Add a Student" search uses as a
+// "did you mean" check — never auto-assigned, always requires a human click.
+// Shared by deck-builder.js (an unmatched list line) and deck-edit.js (an
+// existing deck entry whose master_student_id is missing or stale — see
+// "Check Database for Updates").
+const FUZZY_SUGGESTION_LIMIT = 5;
+
+function fuzzyMatchLine(fallbackName, masterStudents) {
+  if (!fallbackName) return [];
+  const { last, first } = splitStoredName(fallbackName);
+  return matchStudentsByName(masterStudents, { firstQuery: first, lastQuery: last })
+    .slice(0, FUZZY_SUGGESTION_LIMIT)
+    .map((s) => s.student);
+}
+
 // Center-crop the largest square out of the source image, then scale to a
 // fixed, phone-friendly size. Applied to every photo before it's uploaded —
 // PDF extraction, an admin's manual add, or a teacher filling in a missing
