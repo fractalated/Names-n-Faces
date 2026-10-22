@@ -77,6 +77,11 @@ p.subtitle { color: var(--muted); margin-top: 0; }
 .topbar-title { display: flex; align-items: center; gap: 12px; }
 .brand-mark { height: 38px; width: auto; flex-shrink: 0; }
 
+/* Logo (every page) and the home-page title link back to index.html. Looks
+   like plain branding, not a link — override the generic .topbar a styling. */
+.topbar a.brand-link { display: inline-flex; color: inherit; font: inherit; }
+.topbar a.brand-link:hover { text-decoration: none; opacity: 0.8; }
+
 .topbar a { color: var(--ultraviolet); text-decoration: none; font-family: var(--sans); font-weight: 600; font-size: 0.9rem; }
 .topbar a:hover { text-decoration: underline; }
 @media (prefers-color-scheme: dark) { .topbar a { color: var(--thistle); } }

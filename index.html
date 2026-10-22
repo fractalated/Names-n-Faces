@@ -33,12 +33,14 @@
 <div id="home-view" class="page hidden">
   <div class="topbar">
     <div class="topbar-title">
-      <picture>
-        <source srcset="assets/logo-white.png" media="(prefers-color-scheme: dark)">
-        <img src="assets/logo-purple.png" alt="Lutheran High School" class="brand-mark">
-      </picture>
+      <a href="index.html" class="brand-link" title="Home">
+        <picture>
+          <source srcset="assets/logo-white.png" media="(prefers-color-scheme: dark)">
+          <img src="assets/logo-purple.png" alt="Lutheran High School" class="brand-mark">
+        </picture>
+      </a>
       <div>
-        <h1>Names &amp; Faces</h1>
+        <h1><a href="index.html" class="brand-link">Names &amp; Faces</a></h1>
         <p class="subtitle">Pick a deck to study, or build a new one.</p>
       </div>
     </div>
@@ -53,7 +55,7 @@
   <div class="card">
     <h2 style="margin-top:0;">Find a Student</h2>
     <p class="subtitle" style="margin-bottom:10px;">See what a student looks like, by name. Either field alone is fine.</p>
-    <form id="student-search-form" style="display:flex; gap:10px; flex-wrap:wrap;">
+    <form id="student-search-form" autocomplete="off" style="display:flex; gap:10px; flex-wrap:wrap;">
       <input type="text" id="search-first-name" placeholder="First name" style="flex:1; min-width:140px;">
       <input type="text" id="search-last-name" placeholder="Last name" style="flex:1; min-width:140px;">
       <button type="submit" style="flex-shrink:0;">Search</button>

@@ -82,7 +82,10 @@ exception to "teachers never write to the shared database."
   Standards doc kept in `assets/` — not tracked in git, see below). Every
   page's `.topbar` includes a `<picture>` logo (`assets/logo-purple.png`
   light / `assets/logo-white.png` dark, swapped via
-  `prefers-color-scheme`) inside a `.topbar-title` wrapper. `assets/` also
+  `prefers-color-scheme`) inside a `.topbar-title` wrapper, wrapped in an
+  `<a class="brand-link" href="index.html">` (as is the home page's own
+  "Names & Faces" title) — clicking it goes home, a fresh load that also
+  clears any Find a Student result. `assets/` also
   holds print-resolution source art and brand-standard PDFs that are
   `.gitignore`d on purpose (only the small optimized `logo-*.png` files are
   tracked/served) — don't `git add -f` those back in.
