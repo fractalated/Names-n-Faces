@@ -181,7 +181,14 @@ const NICKNAME_GROUPS = [
   ["patricia", "pat", "patty", "trish"],
   ["dorothy", "dot", "dottie"],
   ["katherine", "kate", "katie", "kathy", "kat", "kit"],
-  ["elizabeth", "beth", "eliza", "betty", "liz", "lizzy"],
+  ["elizabeth", "beth", "eliza", "betty", "liz", "lizzy", "ellie"],
+  ["eleanor", "ellie", "nora"],
+  ["abigail", "abby", "abbie", "abi"],
+  ["jacob", "jake"],
+  ["isabel", "isabelle", "isabella", "izzy", "bella"],
+  ["cassandra", "cassie"],
+  ["nicholas", "nikolas", "nicolas", "nick", "nicky"],
+  ["gabriella", "gabrielle", "gabby"],
   ["alexander", "alex", "xander", "sasha"],
   ["alexandra", "alex", "sandy", "lexi", "sasha"],
   ["theodore", "ted", "teddy", "theo"],
@@ -280,6 +287,28 @@ function fuzzyMatchLine(fallbackName, masterStudents) {
   return matchStudentsByName(masterStudents, { firstQuery: first, lastQuery: last })
     .slice(0, FUZZY_SUGGESTION_LIMIT)
     .map((s) => s.student);
+}
+
+// 9 -> "9th", 11 -> "11th", 2 -> "2nd". "" for no grade on file.
+function gradeLabel(grade) {
+  const n = parseInt(grade, 10);
+  if (!Number.isInteger(n) || n < 1) return "";
+  const mod100 = n % 100;
+  const suffix = mod100 >= 11 && mod100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th");
+  return `${n}${suffix}`;
+}
+
+// The one way a student's name is shown anywhere in the app: the stored
+// name, then the disambiguator (if any) and grade (if on file) — e.g.
+// "Smith, John (J.R.) 9th". Works for both master students and deck cards,
+// which share the name/disambiguator/grade fields. Every page should use
+// this instead of assembling the string itself, so grade shows everywhere.
+function studentDisplayName(s) {
+  let text = s.name;
+  if (s.disambiguator) text += ` (${s.disambiguator})`;
+  const grade = gradeLabel(s.grade);
+  if (grade) text += ` ${grade}`;
+  return text;
 }
 
 // Center-crop the largest square out of the source image, then scale to a

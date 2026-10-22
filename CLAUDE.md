@@ -50,7 +50,8 @@ exception to "teachers never write to the shared database."
     master database from a roster PDF, add a single student, browse/edit/
     delete master students (including replacing or removing any student's
     photo — the *unrestricted* version of photo management; contrast with
-    the narrow non-admin version below)
+    the narrow non-admin version below), and the "Grade Levels" tab (see
+    "Grade levels" below)
   - `users.html` / `users.js` — admin-only: list every account, hard-delete
     one (deletes their decks only — never touches the shared master database)
   - `app.js` — shared helpers loaded on every page before the page-specific
@@ -61,7 +62,9 @@ exception to "teachers never write to the shared database."
     (`cropToSquare()`), the shared fuzzy-matching trio
     (`normalizeNameKey()`/`levenshtein()`/`similarity()` — see Duplicate
     names below), and the non-admin missing-photo flow
-    (`uploadMissingPhoto()`/`renderAddPhotoControl()`). Any function used by
+    (`uploadMissingPhoto()`/`renderAddPhotoControl()`), and
+    `studentDisplayName()`/`gradeLabel()` (see "Grade levels" below). Any
+    function used by
     more than one page lives here — don't reintroduce a second copy in a
     page-specific file (this happened once already with the matching trio;
     see the git history around the home-page search feature).
@@ -102,7 +105,8 @@ exception to "teachers never write to the shared database."
   admin-entered nickname/initial, set only when two distinct students share
   a `name_key` (see Duplicate names below). `photo_key` is nullable —
   `NULL` means "no photo, render the placeholder silhouette," not an error
-  state.
+  state. `grade` (nullable INTEGER, e.g. 9) is likewise optional — `NULL`
+  just means no grade on file.
 - **`decks`** (per-user) / **`deck_entries`** — a deck is just a named list
   of entries. Each entry stores `raw_name_text` (what was actually in the
   uploaded list) and a **soft reference** `master_student_id` (nullable, no
@@ -483,11 +487,47 @@ guesses between a duplicate-name pair). That fallback keeps the answer
 right for decks gone stale after an annual replace, without silently
 rebinding anything; "Check Database for Updates" is the real fix.
 
-**Grade level is not shown** — no source file has it: the whole-school
-roster PDF (`All Students Roster (Service).pdf`) has only names and photos,
-and the Chapel roster's groups are by advisor, not grade. `master_students`
-has no grade column. Adding grade needs a new data source (e.g. a SIS
-report export with a Grade Level column) plus a migration.
+## Grade levels
+
+Every student name in the app is followed by their grade — "Briski, Sam
+10th" — on every page (decks, quiz reveal, study sheet, deck edit, Find a
+Student, missing photos, deck-builder picks, admin list). All of them go
+through `studentDisplayName()` in `app.js` (name, then "(disambiguator)",
+then grade); never assemble a name string by hand on a page, or the grade
+silently goes missing there. The grade comes from `master_students.grade`
+(migration 0005), returned by `GET /api/master/students`, the deck cards
+route, and both deck-entry add/rebind routes.
+
+**Source**: the SIS exports one CSV per grade ("9th Grade Students.csv" …
+"12th …", columns `"LastName, FirstName","Grade Level"`, grade as "09").
+These are student data — `*.csv` is `.gitignore`d because GitHub Pages
+serves the whole repo root publicly; never `git add -f` them.
+
+**Import** (`admin.html` → "Grade Levels", `matchGradeRows()` in
+`admin.js`, saved via admin-only `POST /api/master/grades`, chunked): the
+SIS has *legal* names but the database has the roster PDF's *preferred*
+names, so only ~960 of 1,114 rows match a `name_key` exactly (measured
+against production, 2026-10-22). The rest are offered as picks against
+not-yet-matched students with a similar last name (`LAST_NAME_MATCH_
+THRESHOLD`, plus a same-first-name fallback for an OCR'd last-name typo
+like "Gauiln"). A pick is **pre-selected** only when it's mutual-best and
+the first names plausibly match (`FIRST_NAME_MATCH_THRESHOLD` or
+`NICKNAME_MAP`) — 125 of them on the real data, all checked correct; ~27
+(middle names like "Nelson, Joseph" → "Nelson, Walker", unrelated
+nicknames like "Hayden" → "Bear") default to Skip for the admin to decide.
+This is a deliberate, scoped relaxation of "fuzzy never auto-binds": a
+grade is a display label, not an identity binding, and nothing saves until
+the admin has seen every pairing and clicked Save. Pick-needed lines render
+first in their own card so they aren't buried under the pre-selected ones.
+The `NICKNAME_GROUPS` additions (Abigail/Abby, Jacob/Jake, Isabel/Izzy,
+Eleanor/Ellie, Nicholas/Nick, …) came from this real data and also improve
+Find a Student.
+
+The upload only *sets* grades for listed students; it never clears others,
+so one grade's file can be uploaded alone. A `mode:"replace"` roster
+re-import wipes every grade (new rows) — re-upload the CSVs afterward (the
+tab says so). Single students: grade field on Add Student, and Manage
+Students → Edit prompts for it.
 
 ## Nav styling
 

@@ -176,7 +176,7 @@ function renderMatchReview(matches, label) {
         <label class="match-option">
           <input type="radio" name="pick-${ri}" value="${c.id}">
           <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${c.name}">
-          <span>${c.name}${c.disambiguator ? ` (${c.disambiguator})` : ""}</span>
+          <span>${studentDisplayName(c)}</span>
         </label>
       `).join("");
       block.innerHTML = `<h4>${r.candidates[0].name}</h4><div class="match-options">${options}</div>`;
@@ -208,7 +208,7 @@ function renderMatchReview(matches, label) {
         <label class="match-option">
           <input type="radio" name="fuzzy-${ri}" value="${c.id}">
           <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${c.name}">
-          <span>${c.name}${c.disambiguator ? ` (${c.disambiguator})` : ""}</span>
+          <span>${studentDisplayName(c)}</span>
         </label>
       `).join("") + `
         <label class="match-option">

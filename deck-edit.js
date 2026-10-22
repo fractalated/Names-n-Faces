@@ -73,7 +73,7 @@ function renderCurrentList() {
     selectLabel.innerHTML = `
       <input type="checkbox">
       <img alt="${card.name}">
-      <div class="name">${card.name}${card.disambiguator ? ` (${card.disambiguator})` : ""}</div>
+      <div class="name">${studentDisplayName(card)}</div>
     `;
     item.appendChild(selectLabel);
     loadCardImage(selectLabel.querySelector("img"), card);
@@ -152,7 +152,7 @@ function renderSuggestion(card, candidates) {
   for (const student of candidates) {
     const row = document.createElement("div");
     row.className = "match-row";
-    row.innerHTML = `<img alt="${student.name}"><span>${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</span>`;
+    row.innerHTML = `<img alt="${student.name}"><span>${studentDisplayName(student)}</span>`;
     const img = row.querySelector("img");
     if (student.hasPhoto) fetchPhotoObjectUrl(student.photoUrl).then((url) => { img.src = url; });
     else img.src = PLACEHOLDER_SILHOUETTE_SVG;
@@ -186,6 +186,7 @@ async function bindEntry(card, student, box) {
   }
   card.name = data.name;
   card.disambiguator = data.disambiguator;
+  card.grade = data.grade;
   card.hasPhoto = data.hasPhoto;
   card.photoUrl = data.photoUrl;
   card.masterStudentId = data.masterStudentId;
@@ -196,8 +197,7 @@ async function bindEntry(card, student, box) {
   const img = entry.selectLabel.querySelector("img");
   img.alt = card.name;
   loadCardImage(img, card);
-  entry.selectLabel.querySelector(".name").textContent =
-    card.name + (card.disambiguator ? ` (${card.disambiguator})` : "");
+  entry.selectLabel.querySelector(".name").textContent = studentDisplayName(card);
   if (!card.hasPhoto && card.masterStudentId) {
     renderAddPhotoControl(entry.item, card.masterStudentId, () => {
       card.hasPhoto = true;
@@ -275,7 +275,7 @@ function renderMatchResults(query, scored) {
     for (const { student } of scored.slice(shown, shown + MATCH_PAGE_SIZE)) {
       const row = document.createElement("div");
       row.className = "match-row";
-      row.innerHTML = `<img alt="${student.name}"><span>${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</span>`;
+      row.innerHTML = `<img alt="${student.name}"><span>${studentDisplayName(student)}</span>`;
       const img = row.querySelector("img");
       if (student.hasPhoto) fetchPhotoObjectUrl(student.photoUrl).then((url) => { img.src = url; });
       else img.src = PLACEHOLDER_SILHOUETTE_SVG;

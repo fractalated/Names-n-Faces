@@ -34,7 +34,7 @@ async function showAddDuplicatePrompt(candidates, name) {
     const thumbs = candidates.map((c, i) => `
       <div class="roster-item">
         <img alt="${c.name}" data-idx="${i}">
-        <div class="name">${c.name}${c.disambiguator ? ` (${c.disambiguator})` : ""}</div>
+        <div class="name">${studentDisplayName(c)}</div>
       </div>
     `).join("");
     card.innerHTML = `
@@ -78,12 +78,14 @@ document.getElementById("add-form").addEventListener("submit", async (e) => {
   document.getElementById("add-duplicate-resolver").innerHTML = "";
 
   const name = document.getElementById("add-name").value.trim();
+  const grade = document.getElementById("add-grade").value;
   const photoFile = document.getElementById("add-photo").files[0] || null;
 
   async function submit(disambiguator, forceDistinct) {
     const form = new FormData();
     form.append("name", name);
     if (disambiguator) form.append("disambiguator", disambiguator);
+    if (grade) form.append("grade", grade);
     if (forceDistinct) form.append("forceDistinct", "true");
     if (photoFile) form.append("photo", await cropToSquare(photoFile), "photo.jpg");
     const res = await apiFetch("/api/master/students", { method: "POST", body: form });
@@ -129,14 +131,14 @@ function renderManageList() {
     item.className = "roster-item";
     item.innerHTML = `
       <img alt="${s.name}">
-      <div class="name">${s.name}${s.disambiguator ? ` (${s.disambiguator})` : ""}</div>
+      <div class="name">${studentDisplayName(s)}</div>
       <input type="file" accept="image/*" class="photo-input hidden">
       <div style="display:flex; gap:6px; justify-content:center; margin-top:4px; flex-wrap:wrap;">
         <button type="button" class="secondary photo-btn">${s.hasPhoto ? "Replace Photo" : "Add Photo"}</button>
         ${s.hasPhoto ? '<button type="button" class="secondary remove-photo-btn">Remove Photo</button>' : ""}
       </div>
       <div style="display:flex; gap:6px; justify-content:center; margin-top:6px; flex-wrap:wrap;">
-        <button type="button" class="secondary edit-btn">Edit Name</button>
+        <button type="button" class="secondary edit-btn">Edit</button>
         <button type="button" class="danger delete-btn">Delete</button>
       </div>
     `;
@@ -180,9 +182,12 @@ function renderManageList() {
       if (newName === null || !newName.trim()) return;
       const newDisambig = prompt("Nickname/initial (leave blank for none):", s.disambiguator || "");
       if (newDisambig === null) return;
+      const newGrade = prompt("Grade, e.g. 9 (leave blank for none):", s.grade ?? "");
+      if (newGrade === null) return;
       const form = new FormData();
       form.append("name", newName.trim());
       form.append("disambiguator", newDisambig.trim());
+      form.append("grade", newGrade.trim());
       const res = await apiFetch(`/api/master/students/${s.id}`, { method: "PATCH", body: form });
       if (!res.ok) {
         alert((await res.json()).error || "Could not update student");
@@ -695,4 +700,268 @@ document.getElementById("pdf-input").addEventListener("change", async (e) => {
   const groups = findDuplicateGroups(students);
   const resolvedStudents = await resolveDuplicates(groups, students);
   renderReviewGrid(resolvedStudents, unreadableNamePhotos, noPhotoNames);
+});
+
+// ---------- Grade Levels ----------
+// The SIS exports one CSV per grade ("LastName, FirstName","Grade Level").
+// The SIS uses legal names but the roster PDF (and so the database) often
+// has the name a student goes by — "Briski, Samuel" vs "Briski, Sam" — so
+// only ~85% of rows match a name_key exactly. Exact matches are applied
+// as-is; every other row is shown for the admin to confirm against the
+// database students with a similar last name who weren't matched exactly.
+// A suggestion is pre-selected only when it's clear-cut (see
+// matchGradeRows); everything else defaults to "Skip", and nothing is saved
+// until the admin clicks Save.
+
+// Minimal RFC 4180 parser: quoted fields, "" escapes, commas inside quotes
+// (every name has one), CRLF or LF line endings.
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (ch === '"') inQuotes = false;
+      else field += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ",") { row.push(field); field = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); rows.push(row); row = []; field = "";
+    } else field += ch;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((f) => f.trim()));
+}
+
+// -> [{name, grade}]. Finds the name/grade columns by header text, falling
+// back to the first two columns if there's no recognizable header.
+function parseGradeFile(text) {
+  const rows = parseCsv(text.replace(/^﻿/, ""));
+  if (rows.length === 0) return [];
+  const header = rows[0].map((h) => h.toLowerCase());
+  let gradeCol = header.findIndex((h) => h.includes("grade"));
+  let nameCol = header.findIndex((h) => h.includes("name"));
+  let dataRows = rows.slice(1);
+  if (gradeCol === -1 || nameCol === -1) {
+    nameCol = 0; gradeCol = 1; dataRows = rows;
+  }
+  const out = [];
+  for (const r of dataRows) {
+    const name = (r[nameCol] || "").trim();
+    const grade = parseInt((r[gradeCol] || "").trim(), 10);
+    if (name && grade >= 1 && grade <= 12) out.push({ name, grade });
+  }
+  return out;
+}
+
+const GRADE_SUGGESTION_MIN_FIRST_SCORE = FIRST_NAME_MATCH_THRESHOLD;
+
+function scoreGradeCandidate(rowParts, student) {
+  const parts = splitStoredName(student.name);
+  const lastScore = similarity(rowParts.last, parts.last);
+  const direct = similarity(rowParts.first, parts.first);
+  const firstScore = areNicknameEquivalent(rowParts.first, parts.first) ? Math.max(direct, 0.8) : direct;
+  return { lastScore, firstScore, score: (lastScore + firstScore) / 2 };
+}
+
+// -> {exact: [{student, grade}], review: [{row, candidates, preselectId}],
+//     unmatched: [row]}.
+// A name_key shared by two database students (a duplicate-name pair) is
+// never guessed between — it goes to review with no pre-selection.
+// For the rest, candidates are database students not already claimed by an
+// exact match whose last name clears the usual LAST_NAME_MATCH_THRESHOLD.
+// The top candidate is pre-selected only when the pairing is mutual (this
+// row is also that student's best-scoring row) and the first names are
+// plausibly the same (similarity/nickname score >= the usual first-name
+// threshold) — so "Floyd, Samuel"/"Floyd, Benjamin" vs "Floyd, Sam"/
+// "Floyd, Ben" pre-select correctly, while "Nelson, Joseph" vs "Nelson,
+// Walker" (probably a middle name, but unknowable) waits for a human.
+function matchGradeRows(rows, students) {
+  const byKey = new Map();
+  for (const s of students) {
+    const key = normalizeNameKey(s.name);
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(s);
+  }
+  const exact = [], review = [], unmatched = [], pending = [];
+  const claimed = new Set();
+  for (const row of rows) {
+    const hits = byKey.get(normalizeNameKey(row.name)) || [];
+    if (hits.length === 1 && !claimed.has(hits[0].id)) {
+      exact.push({ student: hits[0], grade: row.grade });
+      claimed.add(hits[0].id);
+    } else if (hits.length > 1) {
+      review.push({ row, candidates: hits, preselectId: null });
+    } else {
+      pending.push(row);
+    }
+  }
+  for (const r of review) r.candidates.forEach((c) => claimed.add(c.id));
+
+  const pool = students.filter((s) => !claimed.has(s.id));
+  const scored = pending.map((row) => {
+    const rowParts = splitStoredName(row.name);
+    const cands = pool
+      .map((student) => ({ student, ...scoreGradeCandidate(rowParts, student) }))
+      .filter((c) => c.lastScore >= LAST_NAME_MATCH_THRESHOLD)
+      .sort((a, b) => b.score - a.score);
+    // Last resort for a misspelled last name ("Gaulin" vs the OCR'd
+    // "Gauiln"): same first name, roughly similar last name. Offered, never
+    // pre-selected.
+    if (cands.length === 0) {
+      const loose = pool
+        .map((student) => ({ student, ...scoreGradeCandidate(rowParts, student) }))
+        .filter((c) => c.firstScore === 1 && c.lastScore >= 0.5)
+        .sort((a, b) => b.score - a.score);
+      return { row, cands: loose, loose: true };
+    }
+    return { row, cands };
+  });
+  // Each pool student's best-scoring pending row, for the mutual-best check.
+  const bestRowFor = new Map();
+  for (const entry of scored) {
+    if (entry.loose) continue;
+    for (const c of entry.cands) {
+      const prev = bestRowFor.get(c.student.id);
+      if (!prev || c.score > prev.score) bestRowFor.set(c.student.id, { entry, score: c.score });
+    }
+  }
+  for (const entry of scored) {
+    if (entry.cands.length === 0) { unmatched.push(entry.row); continue; }
+    const top = entry.cands[0];
+    const mutual = bestRowFor.get(top.student.id)?.entry === entry;
+    review.push({
+      row: entry.row,
+      candidates: entry.cands.slice(0, FUZZY_SUGGESTION_LIMIT).map((c) => c.student),
+      preselectId: !entry.loose && mutual && top.firstScore >= GRADE_SUGGESTION_MIN_FIRST_SCORE ? top.student.id : null,
+    });
+  }
+  return { exact, review, unmatched };
+}
+
+function renderGradeReview(result, students) {
+  const container = document.getElementById("grade-review");
+  container.innerHTML = "";
+  const { exact, review, unmatched } = result;
+
+  const summary = document.createElement("div");
+  summary.className = "card";
+  summary.innerHTML = `
+    <h3>Ready to save</h3>
+    <p>${exact.length} student(s) matched exactly, and ${review.filter((r) => r.preselectId).length} more look like nicknames and are already selected. ${review.filter((r) => !r.preselectId).length} need you to pick below${unmatched.length ? `, and ${unmatched.length} couldn't be matched at all` : ""}.</p>
+    <button type="button" id="save-grades-btn">Save Grades</button>
+    <div id="grade-save-status" style="margin-top:10px;"></div>
+  `;
+  container.appendChild(summary);
+
+  // Lines that need a decision go first, in their own card, so they aren't
+  // buried among the (much longer) list of clear-cut pre-selected pairs.
+  const needsPick = review.filter((r) => !r.preselectId);
+  const preselected = review.filter((r) => r.preselectId);
+  const sections = [
+    [needsPick, `Pick these (${needsPick.length})`, "The grade file's name doesn't exactly match anyone in the database — often a middle name or a nickname. Pick who each one is, or skip it."],
+    [preselected, `Already selected — skim these (${preselected.length})`, "These look like nicknames of the same student (e.g. Samuel → Sam) and are already selected. Change any that are wrong."],
+  ];
+  let ri = 0;
+  for (const [items, title, blurb] of sections) {
+    if (!items.length) continue;
+    const reviewCard = document.createElement("div");
+    reviewCard.className = "card";
+    reviewCard.innerHTML = `<h3>${title}</h3><p>${blurb}</p>`;
+    items.forEach((r) => {
+      ri++;
+      const block = document.createElement("div");
+      block.className = "duplicate-group";
+      const options = r.candidates.map((c) => `
+        <label class="match-option">
+          <input type="radio" name="grade-pick-${ri}" value="${c.id}" ${c.id === r.preselectId ? "checked" : ""}>
+          <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${c.name}">
+          <span>${studentDisplayName(c)}</span>
+        </label>
+      `).join("") + `
+        <label class="match-option">
+          <input type="radio" name="grade-pick-${ri}" value="" ${r.preselectId ? "" : "checked"}>
+          <span>Skip — don't set a grade from this line</span>
+        </label>
+      `;
+      block.innerHTML = `<h4>${r.row.name} — ${gradeLabel(r.row.grade)}</h4><div class="match-options">${options}</div>`;
+      block.querySelectorAll("img").forEach((img) => {
+        const photoUrl = img.dataset.photo;
+        if (photoUrl) fetchPhotoObjectUrl(photoUrl).then((url) => { img.src = url; });
+        else img.src = PLACEHOLDER_SILHOUETTE_SVG;
+      });
+      block.querySelectorAll('input[type="radio"]').forEach((radio) => {
+        radio.addEventListener("change", () => { r.chosenId = radio.value || null; });
+      });
+      r.chosenId = r.preselectId;
+      reviewCard.appendChild(block);
+    });
+    container.appendChild(reviewCard);
+  }
+
+  if (unmatched.length) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<h3>Not found</h3><p class="warn">No one in the database has a similar last name — add them from "Add Student", or set the grade by hand from "Manage Students" → Edit: ${unmatched.map((r) => `${r.name} (${gradeLabel(r.grade)})`).join(", ")}.</p>`;
+    container.appendChild(card);
+  }
+
+  summary.querySelector("#save-grades-btn").addEventListener("click", async (e) => {
+    const statusEl = summary.querySelector("#grade-save-status");
+    const assignments = exact.map((m) => ({ id: m.student.id, grade: m.grade }));
+    const picked = new Set();
+    for (const r of review) {
+      if (!r.chosenId) continue;
+      if (picked.has(r.chosenId)) {
+        const s = students.find((st) => st.id === r.chosenId);
+        statusEl.innerHTML = `<p class="warn">${s ? s.name : "A student"} is picked for more than one line — fix that before saving.</p>`;
+        return;
+      }
+      picked.add(r.chosenId);
+      assignments.push({ id: r.chosenId, grade: r.row.grade });
+    }
+    e.target.disabled = true;
+    // Chunked so a whole school's worth of updates never lands in one
+    // oversized D1 batch.
+    const CHUNK_SIZE = 250;
+    let updated = 0;
+    for (let i = 0; i < assignments.length; i += CHUNK_SIZE) {
+      statusEl.textContent = `Saving ${Math.min(i + CHUNK_SIZE, assignments.length)} of ${assignments.length}…`;
+      const res = await apiFetch("/api/master/grades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignments: assignments.slice(i, i + CHUNK_SIZE) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        statusEl.textContent = data.error || "Could not save grades";
+        e.target.disabled = false;
+        return;
+      }
+      updated += data.updated;
+    }
+    const fresh = await loadMasterStudents(true);
+    const stillMissing = fresh.filter((s) => s.grade == null);
+    statusEl.innerHTML = `<p>Saved grades for ${updated} student(s).</p>` + (stillMissing.length
+      ? `<p class="warn">${stillMissing.length} student(s) in the database still have no grade: ${stillMissing.map((s) => s.name).join(", ")}.</p>`
+      : "<p>Every student in the database now has a grade.</p>");
+  });
+}
+
+document.getElementById("grade-input").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  const statusEl = document.getElementById("grade-status");
+  document.getElementById("grade-review").innerHTML = "";
+  const rows = [];
+  for (const file of files) rows.push(...parseGradeFile(await file.text()));
+  if (rows.length === 0) {
+    statusEl.innerHTML = '<p class="warn">No name/grade rows found in those files.</p>';
+    return;
+  }
+  statusEl.textContent = `Read ${rows.length} student(s) from ${files.length} file(s).`;
+  const students = await loadMasterStudents(true);
+  renderGradeReview(matchGradeRows(rows, students), students);
 });

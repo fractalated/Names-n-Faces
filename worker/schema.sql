@@ -21,6 +21,7 @@ CREATE TABLE master_students (
   name_key      TEXT NOT NULL,
   disambiguator TEXT,
   photo_key     TEXT,
+  grade         INTEGER,
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );

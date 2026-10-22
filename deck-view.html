@@ -64,7 +64,7 @@ async function init() {
   for (const card of data.cards) {
     const item = document.createElement("div");
     item.className = "roster-item";
-    const displayName = card.disambiguator ? `${card.name} (${card.disambiguator})` : card.name;
+    const displayName = studentDisplayName(card);
     item.innerHTML = `<img alt="${displayName}"><div class="name">${displayName}</div>`;
     loadCardImage(item.querySelector("img"), card);
     // Only offer this when the card is actually bound to a master student

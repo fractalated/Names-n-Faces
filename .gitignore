@@ -11,3 +11,7 @@ assets/L_correct_wordmark.png
 assets/L-correct-wordmark.png
 assets/L_correct_white.png
 assets/L_correct_whiteback.png
+
+# Student data exports (grade lists, rosters) — never commit: GitHub Pages
+# serves the whole repo root publicly.
+*.csv

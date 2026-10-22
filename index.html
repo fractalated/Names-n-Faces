@@ -246,7 +246,7 @@ function renderStudentResult(container, student) {
   container.appendChild(list);
   const card = document.createElement("div");
   card.className = "roster-item";
-  card.innerHTML = `<img alt="${student.name}"><div class="name">${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</div>`;
+  card.innerHTML = `<img alt="${student.name}"><div class="name">${studentDisplayName(student)}</div>`;
   loadCardImage(card.querySelector("img"), student);
   list.appendChild(card);
   if (!student.hasPhoto) {
@@ -343,7 +343,7 @@ function renderCandidatePicker(container, query, scored) {
       const item = document.createElement("div");
       item.className = "roster-item";
       item.style.cursor = "pointer";
-      item.innerHTML = `<img alt="${student.name}"><div class="name">${student.name}${student.disambiguator ? ` (${student.disambiguator})` : ""}</div>`;
+      item.innerHTML = `<img alt="${student.name}"><div class="name">${studentDisplayName(student)}</div>`;
       loadCardImage(item.querySelector("img"), student);
       item.addEventListener("click", () => renderStudentResult(container, student));
       list.appendChild(item);

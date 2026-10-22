@@ -130,6 +130,16 @@ function normalizeNameKey(name) {
   return (name || "").toString().trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+// Grade level is stored as a plain integer (9 for "09", "9", or "9th").
+// Returns null for blank (no grade on file), NaN for anything that isn't a
+// real grade, so callers can tell "clear it" apart from "reject this".
+function parseGrade(value) {
+  const s = (value ?? "").toString().trim();
+  if (!s) return null;
+  const n = parseInt(s, 10);
+  return Number.isInteger(n) && n >= 1 && n <= 12 ? n : NaN;
+}
+
 function extFromType(type) {
   if (type === "image/png") return "png";
   if (type === "image/webp") return "webp";
@@ -251,12 +261,13 @@ export default {
 
     if (pathname === "/api/master/students" && request.method === "GET") {
       const { results } = await env.DB.prepare(
-        "SELECT id, name, disambiguator, photo_key IS NOT NULL AS has_photo FROM master_students ORDER BY name"
+        "SELECT id, name, disambiguator, grade, photo_key IS NOT NULL AS has_photo FROM master_students ORDER BY name"
       ).all();
       const students = results.map((s) => ({
         id: s.id,
         name: s.name,
         disambiguator: s.disambiguator || null,
+        grade: s.grade ?? null,
         hasPhoto: !!s.has_photo,
         photoUrl: s.has_photo ? `/api/master/photo/${s.id}` : null,
       }));
@@ -316,16 +327,18 @@ export default {
       const nameKey = normalizeNameKey(name);
       const forceDistinct = (form.get("forceDistinct") || "").toString() === "true";
       let disambiguator = (form.get("disambiguator") || "").toString().trim() || null;
+      const grade = parseGrade(form.get("grade"));
+      if (Number.isNaN(grade)) return json({ error: "Grade must be a number from 1 to 12" }, 400, env);
 
       const existing = await env.DB.prepare(
-        "SELECT id, name, disambiguator, photo_key IS NOT NULL AS has_photo FROM master_students WHERE name_key = ?"
+        "SELECT id, name, disambiguator, grade, photo_key IS NOT NULL AS has_photo FROM master_students WHERE name_key = ?"
       ).bind(nameKey).all();
 
       if (existing.results.length > 0 && !forceDistinct) {
         return json({
           error: "duplicate",
           candidates: existing.results.map((r) => ({
-            id: r.id, name: r.name, disambiguator: r.disambiguator || null, hasPhoto: !!r.has_photo,
+            id: r.id, name: r.name, disambiguator: r.disambiguator || null, grade: r.grade ?? null, hasPhoto: !!r.has_photo,
           })),
         }, 409, env);
       }
@@ -342,9 +355,37 @@ export default {
       }
       const now = Date.now();
       await env.DB.prepare(
-        "INSERT INTO master_students (id, name, name_key, disambiguator, photo_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      ).bind(id, name, nameKey, disambiguator, photoKey, now, now).run();
-      return json({ id, name, disambiguator, hasPhoto: !!photoKey }, 201, env);
+        "INSERT INTO master_students (id, name, name_key, disambiguator, grade, photo_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      ).bind(id, name, nameKey, disambiguator, grade, photoKey, now, now).run();
+      return json({ id, name, disambiguator, grade, hasPhoto: !!photoKey }, 201, env);
+    }
+
+    // Bulk grade-level update from admin's "Grade Levels" import. The client
+    // does all the matching of CSV names to master rows (and the admin
+    // reviews every non-exact pairing) — this route only ever writes the
+    // grade column of rows that already exist, never names or photos.
+    // Students not listed are left as they are, so uploading one grade's
+    // file alone doesn't wipe the other grades.
+    if (pathname === "/api/master/grades" && request.method === "POST") {
+      if (!auth.isAdmin) return forbidden(env);
+      const { assignments } = await request.json().catch(() => ({}));
+      if (!Array.isArray(assignments) || assignments.length === 0) {
+        return json({ error: "assignments[] is required" }, 400, env);
+      }
+      const now = Date.now();
+      const stmts = [];
+      for (const a of assignments) {
+        const grade = parseGrade(a && a.grade);
+        if (!a || !a.id || grade === null || Number.isNaN(grade)) {
+          return json({ error: "Each assignment needs an id and a grade from 1 to 12" }, 400, env);
+        }
+        stmts.push(env.DB.prepare(
+          "UPDATE master_students SET grade = ?, updated_at = ? WHERE id = ?"
+        ).bind(grade, now, a.id.toString()));
+      }
+      const results = await env.DB.batch(stmts);
+      const updated = results.reduce((n, r) => n + (r.meta.changes || 0), 0);
+      return json({ updated }, 200, env);
     }
 
     const masterStudentMatch = pathname.match(/^\/api\/master\/students\/([\w-]+)$/);
@@ -365,6 +406,12 @@ export default {
       if (form.has("disambiguator")) {
         sets.push("disambiguator = ?");
         binds.push((form.get("disambiguator") || "").toString().trim() || null);
+      }
+      if (form.has("grade")) {
+        const grade = parseGrade(form.get("grade"));
+        if (Number.isNaN(grade)) return json({ error: "Grade must be a number from 1 to 12" }, 400, env);
+        sets.push("grade = ?");
+        binds.push(grade);
       }
       const photo = form.get("photo");
       if (photo instanceof File && photo.size > 0) {
@@ -488,7 +535,7 @@ export default {
       if (!deck) return json({ error: "Not found" }, 404, env);
       const { results } = await env.DB.prepare(`
         SELECT de.id AS entry_id, de.raw_name_text, ms.id AS master_id, ms.name AS master_name,
-               ms.disambiguator, ms.photo_key IS NOT NULL AS has_photo
+               ms.disambiguator, ms.grade, ms.photo_key IS NOT NULL AS has_photo
         FROM deck_entries de LEFT JOIN master_students ms ON de.master_student_id = ms.id
         WHERE de.deck_id = ? ORDER BY de.created_at
       `).bind(deckCardsMatch[1]).all();
@@ -496,6 +543,7 @@ export default {
         id: r.entry_id,
         name: r.master_name || r.raw_name_text,
         disambiguator: r.disambiguator || null,
+        grade: r.grade ?? null,
         hasPhoto: !!r.has_photo,
         photoUrl: r.master_id ? `/api/master/photo/${r.master_id}` : null,
         masterStudentId: r.master_id || null,
@@ -551,14 +599,14 @@ export default {
         "INSERT INTO deck_entries (id, deck_id, raw_name_text, master_student_id, created_at) VALUES (?, ?, ?, ?, ?)"
       ).bind(entryId, deckEntriesMatch[1], trimmed, masterStudentId || null, Date.now()).run();
 
-      let card = { id: entryId, name: trimmed, disambiguator: null, hasPhoto: false, photoUrl: null };
+      let card = { id: entryId, name: trimmed, disambiguator: null, grade: null, hasPhoto: false, photoUrl: null };
       if (masterStudentId) {
         const ms = await env.DB.prepare(
-          "SELECT name, disambiguator, photo_key IS NOT NULL AS has_photo FROM master_students WHERE id = ?"
+          "SELECT name, disambiguator, grade, photo_key IS NOT NULL AS has_photo FROM master_students WHERE id = ?"
         ).bind(masterStudentId).first();
         if (ms) {
           card = {
-            id: entryId, name: ms.name, disambiguator: ms.disambiguator || null,
+            id: entryId, name: ms.name, disambiguator: ms.disambiguator || null, grade: ms.grade ?? null,
             hasPhoto: !!ms.has_photo, photoUrl: ms.has_photo ? `/api/master/photo/${masterStudentId}` : null,
           };
         }
@@ -592,7 +640,7 @@ export default {
       const { masterStudentId } = await request.json().catch(() => ({}));
       if (!masterStudentId) return json({ error: "masterStudentId is required" }, 400, env);
       const ms = await env.DB.prepare(
-        "SELECT id, name, disambiguator, photo_key IS NOT NULL AS has_photo FROM master_students WHERE id = ?"
+        "SELECT id, name, disambiguator, grade, photo_key IS NOT NULL AS has_photo FROM master_students WHERE id = ?"
       ).bind(masterStudentId).first();
       if (!ms) return json({ error: "Student not found" }, 404, env);
       const result = await env.DB.prepare(
@@ -600,7 +648,7 @@ export default {
       ).bind(ms.id, deckEntryMatch[2], deckEntryMatch[1]).run();
       if (result.meta.changes === 0) return json({ error: "Not found" }, 404, env);
       return json({
-        id: deckEntryMatch[2], name: ms.name, disambiguator: ms.disambiguator || null,
+        id: deckEntryMatch[2], name: ms.name, disambiguator: ms.disambiguator || null, grade: ms.grade ?? null,
         hasPhoto: !!ms.has_photo, photoUrl: ms.has_photo ? `/api/master/photo/${ms.id}` : null,
         masterStudentId: ms.id,
       }, 200, env);

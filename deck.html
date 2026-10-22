@@ -87,8 +87,7 @@ async function showCard() {
 
 document.getElementById("reveal-btn").addEventListener("click", () => {
   const card = cards[index];
-  document.getElementById("name-display").textContent =
-    card.disambiguator ? `${card.name} (${card.disambiguator})` : card.name;
+  document.getElementById("name-display").textContent = studentDisplayName(card);
 });
 
 document.getElementById("next-btn").addEventListener("click", () => {

@@ -31,6 +31,7 @@
     <button class="tab-btn active" data-tab="import">Import Roster PDF</button>
     <button class="tab-btn" data-tab="add">Add Student</button>
     <button class="tab-btn" data-tab="manage">Manage Students</button>
+    <button class="tab-btn" data-tab="grades">Grade Levels</button>
   </div>
 
   <!-- Import Roster PDF -->
@@ -51,6 +52,15 @@
         <label>Name</label>
         <input type="text" id="add-name" placeholder="Last, First" required>
         <div style="height:10px;"></div>
+        <label>Grade (optional)</label>
+        <select id="add-grade">
+          <option value="">—</option>
+          <option value="9">9th</option>
+          <option value="10">10th</option>
+          <option value="11">11th</option>
+          <option value="12">12th</option>
+        </select>
+        <div style="height:10px;"></div>
         <label>Photo (optional)</label>
         <input type="file" id="add-photo" accept="image/*">
         <div class="error-msg" id="add-error"></div>
@@ -66,6 +76,17 @@
       <input type="text" id="manage-search" placeholder="Search by name…">
     </div>
     <div class="roster-list" id="manage-list"></div>
+  </div>
+
+  <!-- Grade Levels -->
+  <div id="tab-grades" class="tab-panel hidden">
+    <div class="card">
+      <p>Upload the grade-level CSV exports (one per grade, e.g. "9th Grade Students.csv" — you can pick several at once). Each student's grade is shown after their name everywhere in the app. Names that match the database exactly are set automatically; anything else is listed below for you to check first. Nothing is saved until you click Save.</p>
+      <p class="warn">Re-importing the roster PDF clears every grade — upload these files again afterward.</p>
+      <input type="file" id="grade-input" accept=".csv,text/csv" multiple>
+      <div id="grade-status" style="margin-top:14px;"></div>
+    </div>
+    <div id="grade-review"></div>
   </div>
 </div>
 
