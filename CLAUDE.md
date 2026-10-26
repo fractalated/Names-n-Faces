@@ -468,6 +468,18 @@ match". Confirming calls `PATCH /api/decks/:id/entries/:entryId`
 (`{masterStudentId}`), which re-verifies deck ownership, only binds to a
 master row that exists, and never touches `raw_name_text`.
 
+## All Students deck
+
+Every user's home page starts with a built-in "All Students" tile
+(Practice / View All only — no Edit or Delete): the whole master database,
+alphabetical by last name, then first name (case-insensitive — the
+server's `ORDER BY name` isn't). It is **not** a row in `decks`; it's the
+reserved deck id `all` (`ALL_STUDENTS_DECK_ID` in `app.js`), which
+`loadDeckCards()` builds client-side from `loadMasterStudents()`.
+`deck.html` and `deck-view.html` both load cards through `loadDeckCards()`
+— don't call `/api/decks/:id/cards` directly from a page, or `?d=all`
+breaks there. No worker change was needed.
+
 ## Find a Student: deck membership
 
 The home-page search result shows which of the user's **own** decks

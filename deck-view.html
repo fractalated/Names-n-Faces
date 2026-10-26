@@ -46,12 +46,11 @@ async function init() {
   }
   document.getElementById("quiz-link").href = `deck.html?d=${encodeURIComponent(deckId)}`;
 
-  const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}/cards`);
-  if (!res.ok) {
+  const data = await loadDeckCards(deckId);
+  if (!data) {
     document.getElementById("title").textContent = "Deck not found";
     return;
   }
-  const data = await res.json();
   document.getElementById("title").textContent = data.label;
   document.getElementById("subtitle").textContent = `${data.cards.length} student${data.cards.length === 1 ? "" : "s"}`;
 

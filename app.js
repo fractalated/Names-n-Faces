@@ -311,6 +311,35 @@ function studentDisplayName(s) {
   return text;
 }
 
+// "All Students" — a built-in deck every user gets without uploading a
+// roster: the whole master database, alphabetical by last name. It isn't a
+// row in `decks` (nothing to edit, rename, or delete); deck.html and
+// deck-view.html recognize this reserved id and build the cards client-side
+// from loadMasterStudents(). Real deck ids are UUIDs, so "all" can't collide.
+const ALL_STUDENTS_DECK_ID = "all";
+const ALL_STUDENTS_DECK_LABEL = "All Students";
+
+// Returns {label, cards} for a deck id — the shared loader for deck.html and
+// deck-view.html, so both handle the All Students deck the same way. Cards
+// from the master list get the same shape as GET /api/decks/:id/cards
+// (masterStudentId included, so "Add Photo" works on them too). Returns
+// null when the deck doesn't exist or isn't the user's.
+async function loadDeckCards(deckId) {
+  if (deckId === ALL_STUDENTS_DECK_ID) {
+    const students = await loadMasterStudents();
+    const cards = students
+      .map((s) => ({ ...s, masterStudentId: s.id, sortKey: splitStoredName(s.name) }))
+      .sort((a, b) =>
+        a.sortKey.last.localeCompare(b.sortKey.last)
+        || a.sortKey.first.localeCompare(b.sortKey.first)
+        || (a.disambiguator || "").localeCompare(b.disambiguator || ""));
+    return { label: ALL_STUDENTS_DECK_LABEL, cards };
+  }
+  const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}/cards`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
 // Center-crop the largest square out of the source image, then scale to a
 // fixed, phone-friendly size. Applied to every photo before it's uploaded —
 // PDF extraction, an admin's manual add, or a teacher filling in a missing

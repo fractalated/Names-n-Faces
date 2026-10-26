@@ -106,16 +106,18 @@ async function init() {
     document.getElementById("title").textContent = "Deck not found";
     return;
   }
-  const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}/cards`);
-  if (!res.ok) {
+  const data = await loadDeckCards(deckId);
+  if (!data) {
     document.getElementById("title").textContent = "Deck not found";
     return;
   }
-  const data = await res.json();
   document.getElementById("title").textContent = data.label;
-  const editLink = document.getElementById("edit-link");
-  editLink.href = `deck-edit.html?d=${encodeURIComponent(deckId)}`;
-  editLink.classList.remove("hidden");
+  // The built-in All Students deck has nothing to edit.
+  if (deckId !== ALL_STUDENTS_DECK_ID) {
+    const editLink = document.getElementById("edit-link");
+    editLink.href = `deck-edit.html?d=${encodeURIComponent(deckId)}`;
+    editLink.classList.remove("hidden");
+  }
   document.getElementById("subtitle").textContent = `${data.cards.length} student${data.cards.length === 1 ? "" : "s"}`;
   if (data.cards.length === 0) {
     document.getElementById("empty-msg").classList.remove("hidden");

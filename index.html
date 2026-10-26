@@ -110,7 +110,18 @@ async function render() {
 
   const decks = await loadDecks();
   const grid = document.getElementById("deck-grid");
+  // The built-in All Students deck (see ALL_STUDENTS_DECK_ID in app.js)
+  // comes first for everyone — Practice/View All only, no Edit/Delete.
   grid.innerHTML =
+    `
+      <div class="deck-tile">
+        <a class="deck-tile-link" href="deck.html?d=${ALL_STUDENTS_DECK_ID}">${ALL_STUDENTS_DECK_LABEL}<small>Every student, A&ndash;Z by last name</small></a>
+        <div class="deck-tile-actions">
+          <a href="deck.html?d=${ALL_STUDENTS_DECK_ID}" class="btn">Practice</a>
+          <a href="deck-view.html?d=${ALL_STUDENTS_DECK_ID}" class="secondary btn">View All</a>
+        </div>
+      </div>
+    ` +
     decks.map((d) => `
       <div class="deck-tile" data-deck-id="${d.id}">
         <a class="deck-tile-link" href="deck.html?d=${d.id}">${d.label}<small>${d.entryCount} student${d.entryCount === 1 ? "" : "s"}</small></a>
