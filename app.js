@@ -311,29 +311,43 @@ function studentDisplayName(s) {
   return text;
 }
 
-// "All Students" — a built-in deck every user gets without uploading a
-// roster: the whole master database, alphabetical by last name. It isn't a
-// row in `decks` (nothing to edit, rename, or delete); deck.html and
-// deck-view.html recognize this reserved id and build the cards client-side
-// from loadMasterStudents(). Real deck ids are UUIDs, so "all" can't collide.
-const ALL_STUDENTS_DECK_ID = "all";
-const ALL_STUDENTS_DECK_LABEL = "All Students";
+// Built-in decks every user gets without uploading a roster: the whole
+// master database ("All Students") and one per grade level, alphabetical by
+// last name. They aren't rows in `decks` (nothing to edit, rename, or
+// delete); deck.html and deck-view.html recognize these reserved ids and
+// build the cards client-side from loadMasterStudents(). Real deck ids are
+// UUIDs, so these can't collide. A student with no grade on file appears
+// only in All Students.
+const BUILT_IN_DECKS = [
+  { id: "all", label: "All Students", grade: null },
+  ...[9, 10, 11, 12].map((grade) => ({
+    id: `grade-${grade}`,
+    label: `${gradeLabel(grade)} Grade`,
+    grade,
+  })),
+];
+
+function findBuiltInDeck(deckId) {
+  return BUILT_IN_DECKS.find((d) => d.id === deckId) || null;
+}
 
 // Returns {label, cards} for a deck id — the shared loader for deck.html and
-// deck-view.html, so both handle the All Students deck the same way. Cards
+// deck-view.html, so both handle the built-in decks the same way. Cards
 // from the master list get the same shape as GET /api/decks/:id/cards
 // (masterStudentId included, so "Add Photo" works on them too). Returns
 // null when the deck doesn't exist or isn't the user's.
 async function loadDeckCards(deckId) {
-  if (deckId === ALL_STUDENTS_DECK_ID) {
+  const builtIn = findBuiltInDeck(deckId);
+  if (builtIn) {
     const students = await loadMasterStudents();
     const cards = students
+      .filter((s) => builtIn.grade === null || s.grade === builtIn.grade)
       .map((s) => ({ ...s, masterStudentId: s.id, sortKey: splitStoredName(s.name) }))
       .sort((a, b) =>
         a.sortKey.last.localeCompare(b.sortKey.last)
         || a.sortKey.first.localeCompare(b.sortKey.first)
         || (a.disambiguator || "").localeCompare(b.disambiguator || ""));
-    return { label: ALL_STUDENTS_DECK_LABEL, cards };
+    return { label: builtIn.label, cards };
   }
   const res = await apiFetch(`/api/decks/${encodeURIComponent(deckId)}/cards`);
   if (!res.ok) return null;

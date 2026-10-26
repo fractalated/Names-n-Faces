@@ -112,15 +112,18 @@ async function init() {
     return;
   }
   document.getElementById("title").textContent = data.label;
-  // The built-in All Students deck has nothing to edit.
-  if (deckId !== ALL_STUDENTS_DECK_ID) {
+  // Built-in decks (All Students, per grade) have nothing to edit.
+  const builtIn = findBuiltInDeck(deckId);
+  if (!builtIn) {
     const editLink = document.getElementById("edit-link");
     editLink.href = `deck-edit.html?d=${encodeURIComponent(deckId)}`;
     editLink.classList.remove("hidden");
   }
   document.getElementById("subtitle").textContent = `${data.cards.length} student${data.cards.length === 1 ? "" : "s"}`;
   if (data.cards.length === 0) {
-    document.getElementById("empty-msg").classList.remove("hidden");
+    const emptyMsg = document.getElementById("empty-msg");
+    if (builtIn) emptyMsg.textContent = "No students here yet.";
+    emptyMsg.classList.remove("hidden");
     return;
   }
   cards = shuffle(data.cards);
