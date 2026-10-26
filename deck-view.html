@@ -64,7 +64,7 @@ async function init() {
     const item = document.createElement("div");
     item.className = "roster-item";
     const displayName = studentDisplayName(card);
-    item.innerHTML = `<img alt="${displayName}"><div class="name">${displayName}</div>`;
+    item.innerHTML = `<img alt="${escapeHtml(displayName)}"><div class="name">${escapeHtml(displayName)}</div>`;
     loadCardImage(item.querySelector("img"), card);
     // Only offer this when the card is actually bound to a master student
     // record (masterStudentId set) — a name that never matched anyone has

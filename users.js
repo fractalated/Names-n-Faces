@@ -25,7 +25,7 @@ async function init() {
     const isSelf = user.email === me.email;
     row.innerHTML = `
       <div class="user-row-info">
-        <div class="user-row-email">${user.email}${user.is_admin ? ' <span class="admin-badge">Admin</span>' : ""}</div>
+        <div class="user-row-email">${escapeHtml(user.email)}${user.is_admin ? ' <span class="admin-badge">Admin</span>' : ""}</div>
         <div class="user-row-meta">${user.decks_count} deck${user.decks_count === 1 ? "" : "s"} &middot; joined ${created}</div>
       </div>
       ${isSelf ? "" : '<button class="danger">Delete Account</button>'}

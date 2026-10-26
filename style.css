@@ -187,6 +187,10 @@ input[type="text"], input[type="password"], input[type="email"], select {
 .login-box { max-width: 360px; margin: 60px auto 0; text-align: center; }
 .login-box .brand-mark { height: 52px; margin-bottom: 4px; }
 .login-box .card { text-align: left; }
+.remember-me { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-family: var(--sans); font-size: 0.9rem; cursor: pointer; }
+.remember-me input { width: auto; margin-top: 3px; }
+.remember-me small { display: block; color: var(--muted); font-size: 0.8rem; margin-top: 2px; }
+.logout-all { text-align: center; color: var(--muted); font-family: var(--sans); font-size: 0.85rem; margin-top: 28px; }
 .error-msg { color: var(--danger); font-family: var(--sans); font-size: 0.9rem; margin-top: 8px; min-height: 1.2em; }
 
 .flashcard { text-align: center; }

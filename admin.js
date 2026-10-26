@@ -33,12 +33,12 @@ async function showAddDuplicatePrompt(candidates, name) {
     card.className = "card";
     const thumbs = candidates.map((c, i) => `
       <div class="roster-item">
-        <img alt="${c.name}" data-idx="${i}">
-        <div class="name">${studentDisplayName(c)}</div>
+        <img alt="${escapeHtml(c.name)}" data-idx="${i}">
+        <div class="name">${escapeHtml(studentDisplayName(c))}</div>
       </div>
     `).join("");
     card.innerHTML = `
-      <p class="warn">"${name}" already exists in the database:</p>
+      <p class="warn">"${escapeHtml(name)}" already exists in the database:</p>
       <div class="roster-list">${thumbs}</div>
       <p>If this is a different person, give them a nickname or initial so they can be told apart:</p>
       <input type="text" id="add-dup-disambig" placeholder='e.g. J.R., or "Johnny"'>
@@ -130,8 +130,8 @@ function renderManageList() {
     const item = document.createElement("div");
     item.className = "roster-item";
     item.innerHTML = `
-      <img alt="${s.name}">
-      <div class="name">${studentDisplayName(s)}</div>
+      <img alt="${escapeHtml(s.name)}">
+      <div class="name">${escapeHtml(studentDisplayName(s))}</div>
       <input type="file" accept="image/*" class="photo-input hidden">
       <div style="display:flex; gap:6px; justify-content:center; margin-top:4px; flex-wrap:wrap;">
         <button type="button" class="secondary photo-btn">${s.hasPhoto ? "Replace Photo" : "Add Photo"}</button>
@@ -472,7 +472,7 @@ async function extractAllStudents(pdf, statusEl) {
       row.innerHTML = `✅ Page ${pageNum}: ${withPhoto} student(s) with photos` +
         (withoutPhoto ? `, ${withoutPhoto} with no photo` : "");
     } catch (err) {
-      row.innerHTML = `❌ Page ${pageNum}: ${err.message}`;
+      row.innerHTML = `❌ Page ${pageNum}: ${escapeHtml(err.message)}`;
     }
   }
   return { students, unreadableNamePhotos, noPhotoNames };
@@ -532,15 +532,15 @@ async function resolveDuplicates(groups, students) {
         const url = s.blob ? URL.createObjectURL(s.blob) : PLACEHOLDER_SILHOUETTE_SVG;
         return `
           <div class="duplicate-candidate" data-idx="${idx}">
-            <img src="${url}" alt="${s.name}">
-            <div class="name">${s.name}</div>
+            <img src="${url}" alt="${escapeHtml(s.name)}">
+            <div class="name">${escapeHtml(s.name)}</div>
             <label class="hidden"><input type="radio" name="keep-${gi}" class="keep-radio" value="${idx}"> Keep this photo</label>
             <input type="text" class="disambig-input hidden" placeholder='Nickname or initial (e.g. J.R.)'>
           </div>
         `;
       }).join("");
       groupCard.innerHTML = `
-        <h4>${students[idxs[0]].name} — found ${idxs.length} times</h4>
+        <h4>${escapeHtml(students[idxs[0]].name)} — found ${idxs.length} times</h4>
         <div class="mode-choice">
           <label><input type="radio" name="mode-${gi}" value="same"> Same person (pick which photo to keep)</label>
           <label><input type="radio" name="mode-${gi}" value="distinct"> Different people (name each one so they can be told apart)</label>
@@ -611,8 +611,8 @@ function renderReviewGrid(students, unreadableNamePhotos, noPhotoNames) {
     item.className = "roster-item";
     const url = s.blob ? URL.createObjectURL(s.blob) : PLACEHOLDER_SILHOUETTE_SVG;
     item.innerHTML = `
-      <img src="${url}" alt="${s.name}">
-      <div class="name">${s.name}</div>
+      <img src="${url}" alt="${escapeHtml(s.name)}">
+      <div class="name">${escapeHtml(s.name)}</div>
       <button type="button" class="secondary remove-photo-btn" ${s.blob ? "" : "disabled"}>${s.blob ? "No real photo" : "No photo"}</button>
     `;
     if (s.blob) {
@@ -636,7 +636,7 @@ function renderReviewGrid(students, unreadableNamePhotos, noPhotoNames) {
       html += `<p class="warn">${unreadableNamePhotos.length} photo(s) across page(s) ${pages} couldn't be paired with a readable name and were not imported. Add those students manually from the "Add Student" tab.</p>`;
     }
     if (noPhotoNames.length) {
-      html += `<p class="warn">${noPhotoNames.length} student(s) were saved with no photo on file — worth adding real photos for them eventually: ${noPhotoNames.map((n) => n.name).join(", ")}.</p>`;
+      html += `<p class="warn">${noPhotoNames.length} student(s) were saved with no photo on file — worth adding real photos for them eventually: ${noPhotoNames.map((n) => escapeHtml(n.name)).join(", ")}.</p>`;
     }
     summary.innerHTML = html;
     container.appendChild(summary);
@@ -877,8 +877,8 @@ function renderGradeReview(result, students) {
       const options = r.candidates.map((c) => `
         <label class="match-option">
           <input type="radio" name="grade-pick-${ri}" value="${c.id}" ${c.id === r.preselectId ? "checked" : ""}>
-          <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${c.name}">
-          <span>${studentDisplayName(c)}</span>
+          <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${escapeHtml(c.name)}">
+          <span>${escapeHtml(studentDisplayName(c))}</span>
         </label>
       `).join("") + `
         <label class="match-option">
@@ -886,7 +886,7 @@ function renderGradeReview(result, students) {
           <span>Skip — don't set a grade from this line</span>
         </label>
       `;
-      block.innerHTML = `<h4>${r.row.name} — ${gradeLabel(r.row.grade)}</h4><div class="match-options">${options}</div>`;
+      block.innerHTML = `<h4>${escapeHtml(r.row.name)} — ${gradeLabel(r.row.grade)}</h4><div class="match-options">${options}</div>`;
       block.querySelectorAll("img").forEach((img) => {
         const photoUrl = img.dataset.photo;
         if (photoUrl) fetchPhotoObjectUrl(photoUrl).then((url) => { img.src = url; });
@@ -904,7 +904,7 @@ function renderGradeReview(result, students) {
   if (unmatched.length) {
     const card = document.createElement("div");
     card.className = "card";
-    card.innerHTML = `<h3>Not found</h3><p class="warn">No one in the database has a similar last name — add them from "Add Student", or set the grade by hand from "Manage Students" → Edit: ${unmatched.map((r) => `${r.name} (${gradeLabel(r.grade)})`).join(", ")}.</p>`;
+    card.innerHTML = `<h3>Not found</h3><p class="warn">No one in the database has a similar last name — add them from "Add Student", or set the grade by hand from "Manage Students" → Edit: ${unmatched.map((r) => `${escapeHtml(r.name)} (${gradeLabel(r.grade)})`).join(", ")}.</p>`;
     container.appendChild(card);
   }
 
@@ -916,7 +916,7 @@ function renderGradeReview(result, students) {
       if (!r.chosenId) continue;
       if (picked.has(r.chosenId)) {
         const s = students.find((st) => st.id === r.chosenId);
-        statusEl.innerHTML = `<p class="warn">${s ? s.name : "A student"} is picked for more than one line — fix that before saving.</p>`;
+        statusEl.innerHTML = `<p class="warn">${s ? escapeHtml(s.name) : "A student"} is picked for more than one line — fix that before saving.</p>`;
         return;
       }
       picked.add(r.chosenId);
@@ -945,7 +945,7 @@ function renderGradeReview(result, students) {
     const fresh = await loadMasterStudents(true);
     const stillMissing = fresh.filter((s) => s.grade == null);
     statusEl.innerHTML = `<p>Saved grades for ${updated} student(s).</p>` + (stillMissing.length
-      ? `<p class="warn">${stillMissing.length} student(s) in the database still have no grade: ${stillMissing.map((s) => s.name).join(", ")}.</p>`
+      ? `<p class="warn">${stillMissing.length} student(s) in the database still have no grade: ${stillMissing.map((s) => escapeHtml(s.name)).join(", ")}.</p>`
       : "<p>Every student in the database now has a grade.</p>");
   });
 }

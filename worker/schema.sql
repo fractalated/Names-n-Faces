@@ -2,6 +2,7 @@
 -- (applied with `wrangler d1 migrations apply`) — do not run this file against a
 -- live/production database, since the DROP TABLE statements below discard data.
 
+DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS deck_entries;
 DROP TABLE IF EXISTS decks;
 DROP TABLE IF EXISTS master_students;
@@ -44,3 +45,14 @@ CREATE TABLE deck_entries (
 );
 CREATE INDEX idx_deck_entries_deck ON deck_entries(deck_id);
 CREATE INDEX idx_deck_entries_master_student ON deck_entries(master_student_id);
+
+CREATE TABLE sessions (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL,
+  remember     INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL
+);
+CREATE INDEX idx_sessions_user ON sessions(user_id);
+CREATE INDEX idx_sessions_expires ON sessions(expires_at);

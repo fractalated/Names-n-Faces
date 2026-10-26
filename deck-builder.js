@@ -149,7 +149,7 @@ function renderMatchReview(matches, label) {
 
   const summary = document.createElement("div");
   summary.className = "card";
-  summary.innerHTML = `<h3>Review before creating "${label}"</h3>
+  summary.innerHTML = `<h3>Review before creating "${escapeHtml(label)}"</h3>
     <p>${autoCount} student(s) matched automatically.` +
     (ambiguous.length ? ` ${ambiguous.length} need you to pick which student they mean.` : "") +
     (notFoundWithSuggestions.length ? ` ${notFoundWithSuggestions.length} weren't matched automatically but may already be in the database under a slightly different name — check these before creating new entries for them.` : "") +
@@ -175,11 +175,11 @@ function renderMatchReview(matches, label) {
       const options = r.candidates.map((c) => `
         <label class="match-option">
           <input type="radio" name="pick-${ri}" value="${c.id}">
-          <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${c.name}">
-          <span>${studentDisplayName(c)}</span>
+          <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${escapeHtml(c.name)}">
+          <span>${escapeHtml(studentDisplayName(c))}</span>
         </label>
       `).join("");
-      block.innerHTML = `<h4>${r.candidates[0].name}</h4><div class="match-options">${options}</div>`;
+      block.innerHTML = `<h4>${escapeHtml(r.candidates[0].name)}</h4><div class="match-options">${options}</div>`;
       ambiguousCard.appendChild(block);
 
       block.querySelectorAll("img").forEach((img) => {
@@ -207,16 +207,16 @@ function renderMatchReview(matches, label) {
       const options = r.fuzzyCandidates.map((c) => `
         <label class="match-option">
           <input type="radio" name="fuzzy-${ri}" value="${c.id}">
-          <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${c.name}">
-          <span>${studentDisplayName(c)}</span>
+          <img data-photo="${c.hasPhoto ? c.photoUrl : ""}" alt="${escapeHtml(c.name)}">
+          <span>${escapeHtml(studentDisplayName(c))}</span>
         </label>
       `).join("") + `
         <label class="match-option">
           <input type="radio" name="fuzzy-${ri}" value="" checked>
-          <span>None of these — add "${r.rawName}" as a new, unmatched entry</span>
+          <span>None of these — add "${escapeHtml(r.rawName)}" as a new, unmatched entry</span>
         </label>
       `;
-      block.innerHTML = `<h4>${r.rawName}</h4><div class="match-options">${options}</div>`;
+      block.innerHTML = `<h4>${escapeHtml(r.rawName)}</h4><div class="match-options">${options}</div>`;
       suggestCard.appendChild(block);
 
       block.querySelectorAll("img").forEach((img) => {
@@ -238,7 +238,7 @@ function renderMatchReview(matches, label) {
     notFoundCard.className = "card";
     notFoundCard.innerHTML = `<h3>Not found in the database</h3>
       <p class="warn">These will still be added to the deck (shown with a placeholder photo) — double check the spelling, or ask the admin to add them.</p>
-      <ul>${notFoundNoSuggestions.map((r) => `<li>${r.rawName}</li>`).join("")}</ul>`;
+      <ul>${notFoundNoSuggestions.map((r) => `<li>${escapeHtml(r.rawName)}</li>`).join("")}</ul>`;
     container.appendChild(notFoundCard);
   }
 

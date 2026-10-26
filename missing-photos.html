@@ -50,7 +50,7 @@ async function init() {
   for (const student of missing) {
     const item = document.createElement("div");
     item.className = "roster-item";
-    item.innerHTML = `<img alt="${student.name}"><div class="name">${studentDisplayName(student)}</div>`;
+    item.innerHTML = `<img alt="${escapeHtml(student.name)}"><div class="name">${escapeHtml(studentDisplayName(student))}</div>`;
     loadCardImage(item.querySelector("img"), student);
     renderAddPhotoControl(item, student.id, () => {
       loadCardImage(item.querySelector("img"), { hasPhoto: true, photoUrl: `/api/master/photo/${student.id}` });

@@ -1,4 +1,10 @@
-const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+// Sessions (see "Sessions" below): a plain sign-in lasts 12 hours from
+// login; "Keep me signed in on this device" lasts 30 days from last use.
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const REMEMBERED_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// A remembered session's expiry is pushed back on use, but at most this
+// often — so a busy page doesn't turn every request into a D1 write.
+const SESSION_TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 const PBKDF2_ITERATIONS = 100000;
 const EMAIL_DOMAIN_RE = /^[^\s@]+@lhsparker\.org$/i;
 
@@ -21,29 +27,14 @@ function forbidden(env) {
   return json({ error: "Forbidden" }, 403, env);
 }
 
-// ---------- base64url / HMAC / token ----------
+// ---------- base64url ----------
 
 function base64UrlEncode(str) {
   return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-function base64UrlDecode(str) {
-  return atob(str.replace(/-/g, "+").replace(/_/g, "/"));
-}
-
-async function hmac(key, message) {
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(key),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(message));
-  return base64UrlEncode(String.fromCharCode(...new Uint8Array(sig)));
-}
 
 // Constant-time string comparison (both inputs expected to be same-alphabet
-// base64url-ish strings) to avoid timing side channels on signature/hash checks.
+// base64url-ish strings) to avoid timing side channels on hash checks.
 function constantTimeEqual(a, b) {
   if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
   let diff = 0;
@@ -51,33 +42,54 @@ function constantTimeEqual(a, b) {
   return diff === 0;
 }
 
-async function signToken(env, payloadObj) {
-  const payload = base64UrlEncode(JSON.stringify(payloadObj));
-  const sig = await hmac(env.TOKEN_SECRET, payload);
-  return `${payload}.${sig}`;
+// ---------- Sessions ----------
+//
+// A login hands the client a random 256-bit token; D1 keeps only its
+// SHA-256 hash (sessions.id), so a leaked database can't be replayed as
+// logins. Because every request looks its session up, a session can be
+// ended server-side at any time — logout, "log out of all devices", or the
+// admin deleting the account — unlike the stateless signed tokens this
+// replaced, which stayed valid until they expired. is_admin is read fresh
+// from `users` on every request for the same reason.
+
+async function hashSessionToken(token) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return base64UrlEncode(String.fromCharCode(...new Uint8Array(digest)));
 }
 
-async function verifyToken(env, token) {
-  if (!token) return null;
-  const parts = token.split(".");
-  if (parts.length !== 2) return null;
-  const [payload, sig] = parts;
-  const expectedSig = await hmac(env.TOKEN_SECRET, payload);
-  if (!constantTimeEqual(sig, expectedSig)) return null;
-  let data;
-  try {
-    data = JSON.parse(base64UrlDecode(payload));
-  } catch {
-    return null;
-  }
-  if (!data.sub || !data.exp || Date.now() >= data.exp) return null;
-  return { userId: data.sub, isAdmin: !!data.admin };
+async function createSession(env, userId, remember) {
+  const token = base64UrlEncode(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+  const now = Date.now();
+  const expiresAt = now + (remember ? REMEMBERED_SESSION_TTL_MS : SESSION_TTL_MS);
+  await env.DB.batch([
+    // Opportunistic cleanup, so expired rows don't pile up.
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= ?").bind(now),
+    env.DB.prepare(
+      "INSERT INTO sessions (id, user_id, remember, created_at, last_used_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(await hashSessionToken(token), userId, remember ? 1 : 0, now, now, expiresAt),
+  ]);
+  return token;
 }
 
 async function requireAuth(request, env) {
-  const auth = request.headers.get("Authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  return verifyToken(env, token);
+  const header = request.headers.get("Authorization") || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) return null;
+  const sessionId = await hashSessionToken(token);
+  const now = Date.now();
+  const row = await env.DB.prepare(`
+    SELECT s.user_id, s.remember, s.last_used_at, u.is_admin
+    FROM sessions s JOIN users u ON u.id = s.user_id
+    WHERE s.id = ? AND s.expires_at > ?
+  `).bind(sessionId, now).first();
+  if (!row) return null;
+  // Remembered sessions slide: 30 days from last use, not from login.
+  if (row.remember && now - row.last_used_at >= SESSION_TOUCH_INTERVAL_MS) {
+    await env.DB.prepare(
+      "UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?"
+    ).bind(now, now + REMEMBERED_SESSION_TTL_MS, sessionId).run();
+  }
+  return { userId: row.user_id, isAdmin: !!row.is_admin, sessionId };
 }
 
 // ---------- password hashing (PBKDF2 via Web Crypto — no bcrypt/argon2 in Workers) ----------
@@ -213,7 +225,7 @@ export default {
     }
 
     if (pathname === "/api/signup" && request.method === "POST") {
-      const { email, password } = await request.json().catch(() => ({}));
+      const { email, password, remember } = await request.json().catch(() => ({}));
       const normalizedEmail = normalizeEmail(email);
       if (!EMAIL_DOMAIN_RE.test(normalizedEmail)) {
         return json({ error: "Signup is restricted to @lhsparker.org email addresses" }, 400, env);
@@ -230,12 +242,12 @@ export default {
       await env.DB.prepare(
         "INSERT INTO users (id, email, password_hash, is_admin, created_at) VALUES (?, ?, ?, 0, ?)"
       ).bind(id, normalizedEmail, passwordHash, Date.now()).run();
-      const token = await signToken(env, { sub: id, admin: false, exp: Date.now() + TOKEN_TTL_MS });
+      const token = await createSession(env, id, remember === true);
       return json({ token }, 201, env);
     }
 
     if (pathname === "/api/login" && request.method === "POST") {
-      const { email, password } = await request.json().catch(() => ({}));
+      const { email, password, remember } = await request.json().catch(() => ({}));
       const normalizedEmail = normalizeEmail(email);
       const user = await env.DB.prepare(
         "SELECT id, password_hash, is_admin FROM users WHERE email = ?"
@@ -243,13 +255,25 @@ export default {
       if (!user || !(await verifyPassword((password || "").toString(), user.password_hash))) {
         return json({ error: "Invalid email or password" }, 401, env);
       }
-      const token = await signToken(env, { sub: user.id, admin: !!user.is_admin, exp: Date.now() + TOKEN_TTL_MS });
+      const token = await createSession(env, user.id, remember === true);
       return json({ token }, 200, env);
     }
 
     const auth = await requireAuth(request, env);
     if (!auth) {
       return json({ error: "Unauthorized" }, 401, env);
+    }
+
+    // Ends just this device's session.
+    if (pathname === "/api/logout" && request.method === "POST") {
+      await env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(auth.sessionId).run();
+      return json({ ok: true }, 200, env);
+    }
+
+    // Ends every session for this user, on every device (lost/stolen laptop).
+    if (pathname === "/api/logout-all" && request.method === "POST") {
+      await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(auth.userId).run();
+      return json({ ok: true }, 200, env);
     }
 
     if (pathname === "/api/me" && request.method === "GET") {
@@ -700,10 +724,12 @@ export default {
       const targetUser = await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(targetId).first();
       if (!targetUser) return json({ error: "Not found" }, 404, env);
 
-      // Deleting a user only removes their own decks/deck_entries — never
+      // Deleting a user only removes their own decks/deck_entries (and
+      // sessions, which logs them out everywhere at once) — never
       // master_students, which is shared, admin-owned data not tied to any
       // one user.
       await env.DB.batch([
+        env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(targetId),
         env.DB.prepare(
           "DELETE FROM deck_entries WHERE deck_id IN (SELECT id FROM decks WHERE user_id = ?)"
         ).bind(targetId),

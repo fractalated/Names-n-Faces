@@ -56,7 +56,7 @@ exception to "teachers never write to the shared database."
     one (deletes their decks only — never touches the shared master database)
   - `app.js` — shared helpers loaded on every page before the page-specific
     script: auth (`apiFetch`, `getToken`/`setToken`/`clearToken`,
-    `requireLogin`), cached loaders (`loadDecks()`, `loadMe()`,
+    `requireLogin`, `logout()` — see Auth model), `escapeHtml()`, cached loaders (`loadDecks()`, `loadMe()`,
     `loadMasterStudents()` — all in-memory, cleared on login/logout), the
     placeholder-silhouette SVG + `loadCardImage()`, photo prep
     (`cropToSquare()`), the shared fuzzy-matching trio
@@ -79,7 +79,7 @@ exception to "teachers never write to the shared database."
   - R2 bucket `names-n-faces-photos` stores photos (private — only ever
     served through the Worker's authenticated `/api/master/photo/:id`
     route, never public). D1 database `names-n-faces-db` stores `users`,
-    `master_students`, `decks`, and `deck_entries`.
+    `sessions`, `master_students`, `decks`, and `deck_entries`.
 - **Branding**: the whole app uses LuHi (Lutheran High School) brand colors/
   type (`style.css`'s `:root` custom properties, cited from the LuHi Brand
   Standards doc kept in `assets/` — not tracked in git, see below). Every
@@ -306,10 +306,41 @@ nobody can find is equivalent to no feature.
 ## Auth model
 
 Every route except `POST /api/login` and `POST /api/signup` requires
-`Authorization: Bearer <token>`. The token is an HMAC-SHA256-signed
-`{sub: userId, admin: bool, exp}` payload, signed with the `TOKEN_SECRET`
-secret (see `signToken`/`verifyToken`). `requireAuth` resolves the token to
-`{userId, isAdmin}`. Admin-only routes (`/api/master/import`,
+`Authorization: Bearer <token>`. The token is a random 256-bit session
+token; D1's `sessions` table (migration 0006) stores only its SHA-256 hash
+as the row id, so a leaked database can't be replayed as logins.
+`requireAuth` looks the session up on every request and resolves it to
+`{userId, isAdmin, sessionId}`, reading `is_admin` fresh from `users` (an
+admin change takes effect immediately, not at next login).
+
+This replaced stateless HMAC-signed tokens, which couldn't be revoked —
+logout only forgot the token locally, and a deleted user's token kept
+working until it expired. Now a session can be ended server-side:
+`POST /api/logout` (this device), `POST /api/logout-all` (every device —
+the home page's "Log out of all devices" link, for a lost laptop), and the
+admin deleting an account deletes its sessions. Don't reintroduce a
+stateless token for convenience; revocability is the point, and it's what
+makes long "remember me" sessions acceptable.
+
+**"Keep me signed in on this device"** (login/signup checkbox, unchecked
+by default — classroom computers are often shared): `remember:true` makes
+a session that lasts 30 days *from last use* (`requireAuth` pushes
+`expires_at` back, at most once an hour so reads don't all become writes),
+and the client keeps it in `localStorage`. Unchecked, the session is a
+fixed 12 hours and the client keeps it in `sessionStorage`, so closing the
+tab/browser signs out (a link opened in a brand-new tab also asks for the
+password again — the accepted cost of that default). `getToken()` checks
+both. Cookies weren't an option: the site (`github.io`) and API
+(`workers.dev`) are different sites, and browsers increasingly block
+cross-site cookies.
+
+**Escape everything put into `innerHTML`** with `escapeHtml()` (`app.js`)
+— student names, disambiguators, deck labels, raw list lines, typed search
+queries, emails, error text. A stored name containing markup would
+otherwise run as script in every teacher's browser and could read their
+long-lived session token. Prefer `textContent` where no markup is needed.
+
+Admin-only routes (`/api/master/import`,
 `/api/master/students` POST/PATCH/DELETE, `/api/admin/users`) re-check
 `isAdmin` server-side on every call — `admin.html`'s client-side redirect
 for non-admins is UX only, never the real authorization boundary. Routes
@@ -319,9 +350,10 @@ missing-photo carve-out above) not even fully admin-write-locked. `decks`/
 `deck_entries` routes **are** scoped by `user_id`.
 
 Passwords are hashed with PBKDF2-SHA256 (Web Crypto `crypto.subtle`, no
-bcrypt/argon2 available in Workers). Secrets (`TOKEN_SECRET`,
-`ANTHROPIC_API_KEY`) are set via `wrangler secret put` and live only in
-Cloudflare — never in this repo.
+bcrypt/argon2 available in Workers). Secrets (`ANTHROPIC_API_KEY`) are set
+via `wrangler secret put` and live only in Cloudflare — never in this repo.
+(`TOKEN_SECRET` signed the old stateless tokens and is no longer read by
+the code; it's harmless to leave set.)
 
 ## Master-import pipeline — lessons learned
 
@@ -426,7 +458,7 @@ calling an import-pipeline change done.
 The worker's auth/data-model logic (signup, login, master CRUD, decks CRUD,
 duplicate handling, admin cascade delete) **can** be exercised without a
 browser or a real PDF — run `wrangler dev --local` with a `.dev.vars` file
-(`TOKEN_SECRET`, `ANTHROPIC_API_KEY`; not committed) and a migrated local
+(`ANTHROPIC_API_KEY`; not committed) and a migrated local
 D1, then drive it with `curl`. For a *fresh* local D1, apply
 `worker/schema.sql` directly (`wrangler d1 execute --local --file=schema.sql`)
 rather than the migration chain — early migrations assume a pre-existing

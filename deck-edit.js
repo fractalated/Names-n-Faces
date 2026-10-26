@@ -72,8 +72,8 @@ function renderCurrentList() {
     selectLabel.className = "roster-item-selectable";
     selectLabel.innerHTML = `
       <input type="checkbox">
-      <img alt="${card.name}">
-      <div class="name">${studentDisplayName(card)}</div>
+      <img alt="${escapeHtml(card.name)}">
+      <div class="name">${escapeHtml(studentDisplayName(card))}</div>
     `;
     item.appendChild(selectLabel);
     loadCardImage(selectLabel.querySelector("img"), card);
@@ -146,13 +146,13 @@ function renderSuggestion(card, candidates) {
   box.dataset.entryId = card.id;
   const label = document.createElement("p");
   label.style.margin = "0 0 8px";
-  label.innerHTML = `Possible match for <strong>${card.name}</strong> — is this the same student?`;
+  label.innerHTML = `Possible match for <strong>${escapeHtml(card.name)}</strong> — is this the same student?`;
   box.appendChild(label);
 
   for (const student of candidates) {
     const row = document.createElement("div");
     row.className = "match-row";
-    row.innerHTML = `<img alt="${student.name}"><span>${studentDisplayName(student)}</span>`;
+    row.innerHTML = `<img alt="${escapeHtml(student.name)}"><span>${escapeHtml(studentDisplayName(student))}</span>`;
     const img = row.querySelector("img");
     if (student.hasPhoto) fetchPhotoObjectUrl(student.photoUrl).then((url) => { img.src = url; });
     else img.src = PLACEHOLDER_SILHOUETTE_SVG;
@@ -257,8 +257,8 @@ function renderMatchResults(query, scored) {
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = scored.length
-    ? `<p>${scored.length} possible match${scored.length === 1 ? "" : "es"} for "${query}" — confirm the right one:</p>`
-    : `<p>No close matches found for "${query}" in the database.</p>`;
+    ? `<p>${scored.length} possible match${scored.length === 1 ? "" : "es"} for "${escapeHtml(query)}" — confirm the right one:</p>`
+    : `<p>No close matches found for "${escapeHtml(query)}" in the database.</p>`;
   resultsEl.appendChild(card);
 
   const rows = document.createElement("div");
@@ -275,7 +275,7 @@ function renderMatchResults(query, scored) {
     for (const { student } of scored.slice(shown, shown + MATCH_PAGE_SIZE)) {
       const row = document.createElement("div");
       row.className = "match-row";
-      row.innerHTML = `<img alt="${student.name}"><span>${studentDisplayName(student)}</span>`;
+      row.innerHTML = `<img alt="${escapeHtml(student.name)}"><span>${escapeHtml(studentDisplayName(student))}</span>`;
       const img = row.querySelector("img");
       if (student.hasPhoto) fetchPhotoObjectUrl(student.photoUrl).then((url) => { img.src = url; });
       else img.src = PLACEHOLDER_SILHOUETTE_SVG;

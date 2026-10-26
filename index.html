@@ -21,6 +21,10 @@
       <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
       <div style="height:10px;"></div>
       <input type="password" id="confirm-password" placeholder="Confirm password" autocomplete="new-password" class="hidden" required>
+      <label class="remember-me">
+        <input type="checkbox" id="remember-me">
+        <span>Keep me signed in on this device<small>Leave unchecked on a shared or classroom computer.</small></span>
+      </label>
       <div class="error-msg" id="auth-error"></div>
       <button type="submit" id="auth-submit" style="width:100%; margin-top:10px; justify-content:center;">Log In</button>
     </form>
@@ -65,6 +69,8 @@
   </div>
 
   <div class="grid" id="deck-grid"></div>
+
+  <p class="logout-all">Lost a laptop or phone? <a href="#" id="logout-all-link">Log out of all devices</a></p>
 </div>
 
 <script src="app.js"></script>
@@ -116,7 +122,7 @@ async function render() {
   grid.innerHTML =
     BUILT_IN_DECKS.map((d) => `
       <div class="deck-tile">
-        <a class="deck-tile-link" href="deck.html?d=${d.id}">${d.label}<small>A&ndash;Z by last name</small></a>
+        <a class="deck-tile-link" href="deck.html?d=${d.id}">${escapeHtml(d.label)}<small>A&ndash;Z by last name</small></a>
         <div class="deck-tile-actions">
           <a href="deck.html?d=${d.id}" class="btn">Practice</a>
           <a href="deck-view.html?d=${d.id}" class="secondary btn">View All</a>
@@ -124,8 +130,8 @@ async function render() {
       </div>
     `).join("") +
     decks.map((d) => `
-      <div class="deck-tile" data-deck-id="${d.id}">
-        <a class="deck-tile-link" href="deck.html?d=${d.id}">${d.label}<small>${d.entryCount} student${d.entryCount === 1 ? "" : "s"}</small></a>
+      <div class="deck-tile" data-deck-id="${escapeHtml(d.id)}">
+        <a class="deck-tile-link" href="deck.html?d=${d.id}">${escapeHtml(d.label)}<small>${d.entryCount} student${d.entryCount === 1 ? "" : "s"}</small></a>
         <div class="deck-tile-actions">
           <a href="deck.html?d=${d.id}" class="btn">Practice</a>
           <a href="deck-view.html?d=${d.id}" class="secondary btn">View All</a>
@@ -153,6 +159,7 @@ document.getElementById("auth-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const email = document.getElementById("email").value;
   const password = document.getElementById("password").value;
+  const remember = document.getElementById("remember-me").checked;
   const errorEl = document.getElementById("auth-error");
   errorEl.textContent = "";
 
@@ -176,14 +183,14 @@ document.getElementById("auth-form").addEventListener("submit", async (e) => {
     const res = await fetch(API_BASE + (mode === "signup" ? "/api/signup" : "/api/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, remember }),
     });
     const data = await res.json();
     if (!res.ok) {
       errorEl.textContent = data.error || (mode === "signup" ? "Could not create account" : "Login failed");
       return;
     }
-    setToken(data.token);
+    setToken(data.token, remember);
     render();
   } catch (err) {
     errorEl.textContent = "Could not reach the server. Try again.";
@@ -193,6 +200,12 @@ document.getElementById("auth-form").addEventListener("submit", async (e) => {
 document.getElementById("logout-link").addEventListener("click", (e) => {
   e.preventDefault();
   logout();
+});
+
+document.getElementById("logout-all-link").addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!confirm("Log out of Names & Faces on every device, including this one?")) return;
+  logout(true);
 });
 
 // "Find a Student" — best-effort, auto-pick the clear winner; only ask the
@@ -227,7 +240,7 @@ document.getElementById("student-search-form").addEventListener("submit", async 
   const queryLabel = [firstQuery, lastQuery].filter(Boolean).join(" ");
 
   if (scored.length === 0) {
-    resultEl.innerHTML = `<p>No student found matching "${queryLabel}".</p>`;
+    resultEl.innerHTML = `<p>No student found matching "${escapeHtml(queryLabel)}".</p>`;
     return;
   }
 
@@ -258,7 +271,7 @@ function renderStudentResult(container, student) {
   container.appendChild(list);
   const card = document.createElement("div");
   card.className = "roster-item";
-  card.innerHTML = `<img alt="${student.name}"><div class="name">${studentDisplayName(student)}</div>`;
+  card.innerHTML = `<img alt="${escapeHtml(student.name)}"><div class="name">${escapeHtml(studentDisplayName(student))}</div>`;
   loadCardImage(card.querySelector("img"), student);
   list.appendChild(card);
   if (!student.hasPhoto) {
@@ -338,7 +351,7 @@ function joinWithAnd(parts) {
 const CANDIDATE_PAGE_SIZE = 10;
 
 function renderCandidatePicker(container, query, scored) {
-  container.innerHTML = `<p>${scored.length} student${scored.length === 1 ? "" : "s"} match "${query}" — pick the right one:</p>`;
+  container.innerHTML = `<p>${scored.length} student${scored.length === 1 ? "" : "s"} match "${escapeHtml(query)}" — pick the right one:</p>`;
   const list = document.createElement("div");
   list.className = "roster-list";
   container.appendChild(list);
@@ -355,7 +368,7 @@ function renderCandidatePicker(container, query, scored) {
       const item = document.createElement("div");
       item.className = "roster-item";
       item.style.cursor = "pointer";
-      item.innerHTML = `<img alt="${student.name}"><div class="name">${studentDisplayName(student)}</div>`;
+      item.innerHTML = `<img alt="${escapeHtml(student.name)}"><div class="name">${escapeHtml(studentDisplayName(student))}</div>`;
       loadCardImage(item.querySelector("img"), student);
       item.addEventListener("click", () => renderStudentResult(container, student));
       list.appendChild(item);

@@ -5,17 +5,21 @@ let cachedDecks = null;
 let cachedUser = null;
 let cachedMasterStudents = null;
 
+// The session token is a revocable server-side session (see the worker's
+// "Sessions"). "Keep me signed in on this device" keeps it in localStorage
+// (survives closing the browser; the server allows 30 days from last use);
+// otherwise it goes in sessionStorage, so closing the tab/browser signs out
+// — the safe default for shared classroom computers (server cap: 12 hours).
 function getToken() {
-  return localStorage.getItem(TOKEN_KEY);
+  return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
 }
-function setToken(token) {
-  localStorage.setItem(TOKEN_KEY, token);
-  cachedDecks = null;
-  cachedUser = null;
-  cachedMasterStudents = null;
+function setToken(token, remember = false) {
+  clearToken();
+  (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
 }
 function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
   cachedDecks = null;
   cachedUser = null;
   cachedMasterStudents = null;
@@ -25,7 +29,20 @@ function requireLogin() {
     location.href = "index.html";
   }
 }
-function logout() {
+// Ends the session on the server, not just locally — a remembered device's
+// token stops working right away. allDevices ends every session this user
+// has (lost/stolen laptop). The local token is cleared either way, even if
+// the server can't be reached.
+async function logout(allDevices = false) {
+  const token = getToken();
+  if (token) {
+    try {
+      await fetch(API_BASE + (allDevices ? "/api/logout-all" : "/api/logout"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {}
+  }
   clearToken();
   location.href = "index.html";
 }
@@ -296,6 +313,18 @@ function gradeLabel(grade) {
   const mod100 = n % 100;
   const suffix = mod100 >= 11 && mod100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th");
   return `${n}${suffix}`;
+}
+
+// Escapes text for use inside an HTML template (element content or a quoted
+// attribute). Every name, deck label, typed query, or other user-entered or
+// OCR'd text that goes into innerHTML must pass through this — otherwise a
+// name containing markup would run as code in a teacher's browser, where it
+// could read their saved login (which can now last 30 days). Text set via
+// textContent doesn't need it.
+function escapeHtml(text) {
+  return String(text ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
 }
 
 // The one way a student's name is shown anywhere in the app: the stored
